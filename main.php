@@ -26,7 +26,7 @@ try {
         echo $ajaxHandler->handleRequest();
     } else {
         // Normal request - output HTML
-        include 'vmf_diff_checker.html';
+        // Don't know what to do with this yet
     }
 } catch (Exception $e) {
     // Log the error
