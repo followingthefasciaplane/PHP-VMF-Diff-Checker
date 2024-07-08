@@ -7,4 +7,5 @@ Eventually I plan for this to be a web-based diff checker between Valve Map Form
 - Fix the parser, because it's pretty cooked right now.
 - Design a better UI.
 - Expand the analysis and statistics to all possible KeyValues you can generate within Hammer++
+- Enhance the analysis and comparison statistics between two different versions of the same map.
 - Security
