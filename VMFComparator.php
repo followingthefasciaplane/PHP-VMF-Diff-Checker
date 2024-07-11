@@ -1,6 +1,11 @@
 <?php
 class VMFComparator {
     private $ignoreOptions;
+    private $parser;
+
+    public function __construct() {
+        $this->parser = new VMFParser();
+    }
 
     public function compareVMF($vmf1, $vmf2, $ignoreOptions) {
         $this->ignoreOptions = $ignoreOptions;
@@ -13,18 +18,15 @@ class VMFComparator {
             'removed' => [],
             'added' => [],
             'changed' => [],
-            'vertex_changed' => []
+            'vertex_changed' => [],
+            'comments' => []
         ];
         $stats = $this->initializeStats();
 
         $this->gatherStats($vmf1['tree'], $stats, 'vmf1');
         $this->gatherStats($vmf2['tree'], $stats, 'vmf2');
 
-        if (!isset($vmf1['idMap']) || !isset($vmf2['idMap']) || !is_array($vmf1['idMap']) || !is_array($vmf2['idMap'])) {
-            throw new Exception("Invalid idMap structure");
-        }
-
-        $this->compareElements($vmf1['idMap'], $vmf2['idMap'], '', $differences, $stats);
+        $this->compareElements($vmf1['tree'], $vmf2['tree'], '', $differences, $stats);
 
         if ($stats['vertex_changes'] > 0) {
             $stats['average_vertex_deviation'] = $stats['total_vertex_deviation'] / $stats['vertex_changes'];
@@ -42,12 +44,140 @@ class VMFComparator {
 
         foreach ($additionalSections as $section => $compareMethod) {
             $stats[$section . '_differences'] = $this->$compareMethod(
-                $vmf1[$section] ?? [],
-                $vmf2[$section] ?? []
+                $vmf1['tree'][$section] ?? [],
+                $vmf2['tree'][$section] ?? []
             );
         }
 
+        // Compare comments if they are preserved
+        if (isset($vmf1['comments']) && isset($vmf2['comments'])) {
+            $differences['comments'] = $this->compareComments($vmf1['comments'], $vmf2['comments']);
+        }
+
         return ['differences' => $differences, 'stats' => $stats];
+    }
+
+    public function compareVMFStreaming($filePath1, $filePath2, $ignoreOptions) {
+        $this->ignoreOptions = $ignoreOptions;
+
+        $stream1 = $this->parser->parseVMF($filePath1);
+        $stream2 = $this->parser->parseVMF($filePath2);
+
+        $differences = [
+            'removed' => [],
+            'added' => [],
+            'changed' => [],
+            'vertex_changed' => [],
+            'comments' => []
+        ];
+        $stats = $this->initializeStats();
+
+        while ($stream1->valid() && $stream2->valid()) {
+            $section1 = $stream1->current();
+            $section2 = $stream2->current();
+
+            if ($section1['name'] === $section2['name']) {
+                $this->compareStreamingSections($section1, $section2, $differences, $stats);
+                $stream1->next();
+                $stream2->next();
+            } elseif ($section1['name'] < $section2['name']) {
+                $differences['removed'][] = $section1;
+                $stream1->next();
+            } else {
+                $differences['added'][] = $section2;
+                $stream2->next();
+            }
+        }
+
+        // Handle remaining sections in either stream
+        while ($stream1->valid()) {
+            $differences['removed'][] = $stream1->current();
+            $stream1->next();
+        }
+
+        while ($stream2->valid()) {
+            $differences['added'][] = $stream2->current();
+            $stream2->next();
+        }
+
+        if ($stats['vertex_changes'] > 0) {
+            $stats['average_vertex_deviation'] = $stats['total_vertex_deviation'] / $stats['vertex_changes'];
+        }
+
+        return ['differences' => $differences, 'stats' => $stats];
+    }
+
+    private function compareStreamingSections($section1, $section2, &$differences, &$stats) {
+        $path = $section1['name'];
+        if ($this->shouldIgnore($path)) {
+            return;
+        }
+
+        $this->compareElements($section1['content'], $section2['content'], $path, $differences, $stats);
+
+        // Update stats for the current section
+        $this->gatherStatsForSection($section1['content'], $stats, 'vmf1');
+        $this->gatherStatsForSection($section2['content'], $stats, 'vmf2');
+    }
+
+    private function gatherStatsForSection($section, &$stats, $key) {
+        $stats['brush_counts'][$key] += $this->countBrushes($section);
+        $stats['displacement_counts'][$key] += $this->countDisplacements($section);
+        $stats['vertex_counts'][$key] += $this->countVertices($section);
+        $this->countTextures($section, $stats['texture_counts'][$key]);
+        $this->countSmoothingGroups($section, $stats['smoothing_group_counts'][$key]);
+        $stats['connections_counts'][$key] += $this->countConnections($section);
+        $this->countEntities($section, $stats['entity_counts'][$key]);
+        $stats['func_detail_counts'][$key] += $this->countFuncDetail($section);
+        $stats['areaportal_counts'][$key] += $this->countAreaportals($section);
+        $stats['occluder_counts'][$key] += $this->countOccluders($section);
+        $stats['hint_brush_counts'][$key] += $this->countHintBrushes($section);
+        $stats['ladder_counts'][$key] += $this->countLadders($section);
+        $stats['water_volume_counts'][$key] += $this->countWaterVolumes($section);
+        $this->updateSkyboxInfo($section, $stats['skybox_info'][$key]);
+        $stats['spawn_point_counts'][$key] += $this->countSpawnPoints($section);
+        $stats['buy_zone_counts'][$key] += $this->countBuyZones($section);
+        $stats['bombsite_counts'][$key] += $this->countBombsites($section);
+    }
+
+    private function compareComments($comments1, $comments2) {
+        $commentDiffs = [
+            'removed' => [],
+            'added' => [],
+            'changed' => []
+        ];
+
+        $allCommentKeys = array_unique(array_merge(array_keys($comments1), array_keys($comments2)));
+
+        foreach ($allCommentKeys as $key) {
+            if (!isset($comments2[$key])) {
+                $commentDiffs['removed'][] = $comments1[$key];
+            } elseif (!isset($comments1[$key])) {
+                $commentDiffs['added'][] = $comments2[$key];
+            } elseif ($comments1[$key] !== $comments2[$key]) {
+                $commentDiffs['changed'][] = [
+                    'old' => $comments1[$key],
+                    'new' => $comments2[$key]
+                ];
+            }
+        }
+
+        return $commentDiffs;
+    }
+
+    private function updateSkyboxInfo($section, &$skyboxInfo) {
+        if (isset($section['skyname'])) {
+            $skyboxInfo['skyname'] = $section['skyname'];
+        }
+        if (isset($section['entity'])) {
+            $entities = is_array($section['entity']) ? $section['entity'] : [$section['entity']];
+            foreach ($entities as $entity) {
+                if (isset($entity['classname']) && $entity['classname'] === 'sky_camera') {
+                    $skyboxInfo['sky_camera'] = $entity;
+                    break;
+                }
+            }
+        }
     }
 
     private function initializeStats() {
@@ -103,55 +233,39 @@ class VMFComparator {
         $stats['bombsite_counts'][$key] = $this->countBombsites($vmf);
     }
 
-    private function compareElements($idMap1, $idMap2, $path, &$differences, &$stats) {
-        $allIds = array_unique(array_merge(array_keys($idMap1), array_keys($idMap2)));
+    private function compareElements($tree1, $tree2, $path, &$differences, &$stats) {
+        $allKeys = array_unique(array_merge(array_keys($tree1), array_keys($tree2)));
         
-        foreach ($allIds as $id) {
-            $newPath = $path ? "$path.$id" : $id;
+        foreach ($allKeys as $key) {
+            $newPath = $path ? "$path.$key" : $key;
             if ($this->shouldIgnore($newPath)) {
                 continue;
             }
             
-            if (!isset($idMap2[$id])) {
+            if (!isset($tree2[$key])) {
                 $differences['removed'][] = [
-                    'id' => $id,
                     'path' => $newPath,
-                    'value' => $idMap1[$id]
+                    'value' => $tree1[$key]
                 ];
                 $stats['total_differences']++;
-            } elseif (!isset($idMap1[$id])) {
+            } elseif (!isset($tree1[$key])) {
                 $differences['added'][] = [
-                    'id' => $id,
                     'path' => $newPath,
-                    'value' => $idMap2[$id]
+                    'value' => $tree2[$key]
                 ];
                 $stats['total_differences']++;
             } else {
-                $elem1 = $idMap1[$id];
-                $elem2 = $idMap2[$id];
-                if (is_array($elem1) && is_array($elem2) && isset($elem1[0]) && isset($elem2[0])) {
-                    // Compare arrays of elements
-                    for ($i = 0; $i < max(count($elem1), count($elem2)); $i++) {
-                        if (!isset($elem1[$i])) {
-                            $differences['added'][] = [
-                                'id' => $id,
-                                'path' => "$newPath.$i",
-                                'value' => $elem2[$i]
-                            ];
-                            $stats['total_differences']++;
-                        } elseif (!isset($elem2[$i])) {
-                            $differences['removed'][] = [
-                                'id' => $id,
-                                'path' => "$newPath.$i",
-                                'value' => $elem1[$i]
-                            ];
-                            $stats['total_differences']++;
-                        } else {
-                            $this->compareElementProperties($elem1[$i], $elem2[$i], "$newPath.$i", $id, $differences, $stats);
-                        }
-                    }
-                } else {
-                    $this->compareElementProperties($elem1, $elem2, $newPath, $id, $differences, $stats);
+                $elem1 = $tree1[$key];
+                $elem2 = $tree2[$key];
+                if (is_array($elem1) && is_array($elem2)) {
+                    $this->compareElements($elem1, $elem2, $newPath, $differences, $stats);
+                } elseif ($elem1 !== $elem2) {
+                    $differences['changed'][] = [
+                        'path' => $newPath,
+                        'old_value' => $elem1,
+                        'new_value' => $elem2
+                    ];
+                    $stats['total_differences']++;
                 }
             }
         }
@@ -830,6 +944,7 @@ class VMFComparator {
 
     public function reset() {
         $this->ignoreOptions = [];
+        $this->parser = new VMFParser();
         error_log("VMFComparator reset completed at " . date('Y-m-d H:i:s'));
     }
 }

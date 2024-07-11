@@ -85,6 +85,9 @@
         .pagination button {
             margin: 0 5px;
         }
+        .checkbox-container {
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body>
@@ -93,6 +96,10 @@
         <input type="file" name="vmf1" accept=".vmf" required>
         <input type="file" name="vmf2" accept=".vmf" required>
         <input type="text" name="ignore" placeholder="Paths to ignore (comma-separated, supports wildcards)">
+        <div class="checkbox-container">
+            <input type="checkbox" id="useStreaming" name="useStreaming">
+            <label for="useStreaming">Use streaming processing (recommended for large files)</label>
+        </div>
         <button type="submit">Compare VMFs</button>
     </form>
     <div id="jobStatus"></div>
@@ -100,284 +107,283 @@
     <div id="results"></div>
 
     <script>
-    let jobId = null;
-    let allDifferences = {};
-    const itemsPerPage = 100; // This should match the value in your PHP config
-    let currentPage = 1;
-
-    document.getElementById('vmfForm').addEventListener('submit', function(e) {
-        e.preventDefault();
-        const formData = new FormData(this);
-        formData.append('action', 'upload');
-        
-        document.getElementById('loading').style.display = 'block';
-        document.getElementById('results').innerHTML = '';
-        document.getElementById('jobStatus').style.display = 'none';
-
-        fetch('main.php', {
-            method: 'POST',
-            body: formData,
-            headers: {
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.error) {
-                alert(data.error);
-                document.getElementById('loading').style.display = 'none';
-            } else {
+        let jobId = null;
+        let allDifferences = {};
+        const itemsPerPage = 100; // This should match the value in your PHP config
+        let currentPage = 1;
+        const jobCheckInterval = 20000; // 20 seconds in milliseconds, matching the PHP config
+    
+        document.getElementById('vmfForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const formData = new FormData(this);
+            formData.append('action', 'upload');
+            formData.append('useStreaming', document.getElementById('useStreaming').checked);
+            
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').innerHTML = '';
+            document.getElementById('jobStatus').style.display = 'none';
+    
+            fetch('main.php', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    throw new Error(data.error);
+                }
                 jobId = data.jobId;
                 checkJobStatus();
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            alert('An error occurred while processing the request.');
-            document.getElementById('loading').style.display = 'none';
-        });
-    });
-
-    function checkJobStatus() {
-        if (!jobId) return;
-        
-        const formData = new FormData();
-        formData.append('action', 'status');
-        formData.append('jobId', jobId);
-        
-        fetch('main.php', {
-            method: 'POST',
-            body: formData,
-            headers: {
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            const jobStatusDiv = document.getElementById('jobStatus');
-            jobStatusDiv.style.display = 'block';
-            jobStatusDiv.textContent = `Job Status: ${data.status}`;
-            if (data.status === 'completed') {
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred while processing the request: ' + error.message);
                 document.getElementById('loading').style.display = 'none';
-                getJobResult();
-            } else if (data.status === 'pending' || data.status === 'processing') {
-                setTimeout(checkJobStatus, 5000); // Check every 5 seconds
-            } else {
-                document.getElementById('loading').style.display = 'none';
-                alert('Job failed or was cancelled.');
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            alert('An error occurred while checking job status.');
-            document.getElementById('loading').style.display = 'none';
+            });
         });
-    }
-
-    function getJobResult() {
-        if (!jobId) return;
-        
-        const formData = new FormData();
-        formData.append('action', 'result');
-        formData.append('jobId', jobId);
-        
-        fetch('main.php', {
-            method: 'POST',
-            body: formData,
-            headers: {
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
+    
+        function checkJobStatus() {
+            if (!jobId) return;
+            
+            const formData = new FormData();
+            formData.append('action', 'status');
+            formData.append('jobId', jobId);
+            
+            fetch('main.php', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                const jobStatusDiv = document.getElementById('jobStatus');
+                jobStatusDiv.style.display = 'block';
+                jobStatusDiv.textContent = `Job Status: ${data.status}`;
+                if (data.status === 'completed') {
+                    document.getElementById('loading').style.display = 'none';
+                    getJobResult();
+                } else if (data.status === 'pending' || data.status === 'processing') {
+                    setTimeout(checkJobStatus, jobCheckInterval);
+                } else {
+                    document.getElementById('loading').style.display = 'none';
+                    throw new Error('Job failed or was cancelled.');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred while checking job status: ' + error.message);
+                document.getElementById('loading').style.display = 'none';
+            });
+        }
+    
+        function getJobResult() {
+            if (!jobId) return;
+            
+            const formData = new FormData();
+            formData.append('action', 'result');
+            formData.append('jobId', jobId);
+            
+            fetch('main.php', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                allDifferences = data.differences;
+                displayResults(data);
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred while fetching job results: ' + error.message);
+                document.getElementById('loading').style.display = 'none';
+            });
+        }
+    
+        function displayResults(data) {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';
+    
             if (data.error) {
-                throw new Error(data.error);
+                resultsDiv.innerHTML = `<h2>Error:</h2><p>${data.error}</p>`;
+                return;
             }
-            allDifferences = data.differences;
-            displayResults(data);
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            alert('An error occurred while fetching job results: ' + error.message);
-            document.getElementById('loading').style.display = 'none';
-        });
-    }
-
-    function displayResults(data) {
-        const resultsDiv = document.getElementById('results');
-        resultsDiv.innerHTML = '';
-
-        if (data.error) {
-            resultsDiv.innerHTML = `<h2>Error:</h2><p>${data.error}</p>`;
-            return;
+    
+            // Display statistics
+            resultsDiv.innerHTML += '<h2>Statistics:</h2>';
+            resultsDiv.innerHTML += generateStatsTable(data.stats);
+    
+            // Display differences
+            resultsDiv.innerHTML += '<h2>Differences:</h2>';
+            displayDifferencesPage(1);
         }
-
-        // Display statistics
-        resultsDiv.innerHTML += '<h2>Statistics:</h2>';
-        resultsDiv.innerHTML += generateStatsTable(data.stats);
-
-        // Display differences
-        resultsDiv.innerHTML += '<h2>Differences:</h2>';
-        displayDifferencesPage(1);
-    }
-
-    function displayDifferencesPage(page) {
-        const resultsDiv = document.getElementById('results');
-        const differenceSection = document.createElement('div');
-        differenceSection.id = 'difference-section';
-        resultsDiv.appendChild(differenceSection);
-
-        currentPage = page;
-        let totalDifferences = 0;
-
-        ['removed', 'added', 'changed', 'vertex_changed'].forEach(type => {
-            if (allDifferences[type] && allDifferences[type].length > 0) {
-                totalDifferences += allDifferences[type].length;
-                const sectionDiv = document.createElement('div');
-                sectionDiv.className = 'difference-section';
-                sectionDiv.innerHTML = `<h3>${type.charAt(0).toUpperCase() + type.slice(1)} Elements (${allDifferences[type].length}):</h3>`;
-                
-                const startIndex = (page - 1) * itemsPerPage;
-                const endIndex = startIndex + itemsPerPage;
-                
-                allDifferences[type].slice(startIndex, endIndex).forEach(diff => {
-                    const diffDiv = document.createElement('div');
-                    diffDiv.className = `difference ${type}`;
-                    let content = `<strong>ID:</strong> ${diff.id || 'N/A'}<br>`;
-                    content += `<strong>Path:</strong> ${diff.path}<br>`;
-                    if (diff.old_value !== undefined) content += `<strong>Old Value:</strong> ${JSON.stringify(diff.old_value)}<br>`;
-                    if (diff.new_value !== undefined) content += `<strong>New Value:</strong> ${JSON.stringify(diff.new_value)}<br>`;
-                    if (diff.value !== undefined) content += `<strong>Value:</strong> ${JSON.stringify(diff.value)}<br>`;
-                    if (diff.difference) {
-                        content += displayVertexDifferences(diff.difference);
-                    }
-                    diffDiv.innerHTML = content;
-                    sectionDiv.appendChild(diffDiv);
-                });
-                
-                differenceSection.appendChild(sectionDiv);
+    
+        function displayDifferencesPage(page) {
+            const resultsDiv = document.getElementById('results');
+            const differenceSection = document.createElement('div');
+            differenceSection.id = 'difference-section';
+            resultsDiv.appendChild(differenceSection);
+    
+            currentPage = page;
+            let totalDifferences = 0;
+    
+            ['removed', 'added', 'changed', 'vertex_changed'].forEach(type => {
+                if (allDifferences[type] && allDifferences[type].length > 0) {
+                    totalDifferences += allDifferences[type].length;
+                    const sectionDiv = document.createElement('div');
+                    sectionDiv.className = 'difference-section';
+                    sectionDiv.innerHTML = `<h3>${type.charAt(0).toUpperCase() + type.slice(1)} Elements (${allDifferences[type].length}):</h3>`;
+                    
+                    const startIndex = (page - 1) * itemsPerPage;
+                    const endIndex = startIndex + itemsPerPage;
+                    
+                    allDifferences[type].slice(startIndex, endIndex).forEach(diff => {
+                        const diffDiv = document.createElement('div');
+                        diffDiv.className = `difference ${type}`;
+                        let content = `<strong>ID:</strong> ${diff.id || 'N/A'}<br>`;
+                        content += `<strong>Path:</strong> ${diff.path}<br>`;
+                        if (diff.old_value !== undefined) content += `<strong>Old Value:</strong> ${JSON.stringify(diff.old_value)}<br>`;
+                        if (diff.new_value !== undefined) content += `<strong>New Value:</strong> ${JSON.stringify(diff.new_value)}<br>`;
+                        if (diff.value !== undefined) content += `<strong>Value:</strong> ${JSON.stringify(diff.value)}<br>`;
+                        if (diff.difference) {
+                            content += displayVertexDifferences(diff.difference);
+                        }
+                        diffDiv.innerHTML = content;
+                        sectionDiv.appendChild(diffDiv);
+                    });
+                    
+                    differenceSection.appendChild(sectionDiv);
+                }
+            });
+            
+            if (totalDifferences === 0) {
+                differenceSection.innerHTML = '<p>No differences found.</p>';
+            } else {
+                const totalPages = Math.ceil(totalDifferences / itemsPerPage);
+                differenceSection.appendChild(createPagination(totalPages));
             }
-        });
-        
-        if (totalDifferences === 0) {
-            differenceSection.innerHTML = '<p>No differences found.</p>';
-        } else {
-            const totalPages = Math.ceil(totalDifferences / itemsPerPage);
-            differenceSection.appendChild(createPagination(totalPages));
         }
-    }
-
-    function displayVertexDifferences(diff) {
-        let content = `<strong>Vertices Changed:</strong> ${diff.changed_count}<br>`;
-        content += `<strong>Max Difference:</strong> ${diff.max_deviation.toFixed(6)}<br>`;
-        content += `<strong>Avg Difference:</strong> ${diff.avg_deviation.toFixed(6)}<br>`;
-        return content;
-    }
-
-    function createPagination(totalPages) {
-        const paginationDiv = document.createElement('div');
-        paginationDiv.className = 'pagination';
-        
-        const prevButton = document.createElement('button');
-        prevButton.textContent = 'Previous';
-        prevButton.disabled = currentPage === 1;
-        prevButton.addEventListener('click', () => displayDifferencesPage(currentPage - 1));
-        paginationDiv.appendChild(prevButton);
-
-        for (let i = 1; i <= totalPages; i++) {
-            const pageButton = document.createElement('button');
-            pageButton.textContent = i;
-            pageButton.disabled = i === currentPage;
-            pageButton.addEventListener('click', () => displayDifferencesPage(i));
-            paginationDiv.appendChild(pageButton);
+    
+        function displayVertexDifferences(diff) {
+            let content = `<strong>Vertices Changed:</strong> ${diff.changed_count}<br>`;
+            content += `<strong>Max Difference:</strong> ${diff.max_deviation.toFixed(6)}<br>`;
+            content += `<strong>Avg Difference:</strong> ${diff.avg_deviation.toFixed(6)}<br>`;
+            return content;
         }
-
-        const nextButton = document.createElement('button');
-        nextButton.textContent = 'Next';
-        nextButton.disabled = currentPage === totalPages;
-        nextButton.addEventListener('click', () => displayDifferencesPage(currentPage + 1));
-        paginationDiv.appendChild(nextButton);
-
-        return paginationDiv;
-    }
-
-    function generateStatsTable(stats) {
-        let html = '<table class="stats-table">';
-        html += '<tr><th>Statistic</th><th>VMF 1</th><th>VMF 2</th></tr>';
-        html += `<tr><td>Total Differences</td><td colspan="2">${stats.total_differences}</td></tr>`;
-        html += `<tr><td>Vertex Changes</td><td colspan="2">${stats.vertex_changes}</td></tr>`;
-        html += `<tr><td>Max Vertex Deviation</td><td colspan="2">${stats.max_vertex_deviation.toFixed(6)}</td></tr>`;
-        if (stats.vertex_changes > 0) {
-            html += `<tr><td>Average Vertex Deviation</td><td colspan="2">${stats.average_vertex_deviation.toFixed(6)}</td></tr>`;
-        }
-        html += `<tr><td>Brush Count</td><td>${stats.brush_counts.vmf1}</td><td>${stats.brush_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Displacement Count</td><td>${stats.displacement_counts.vmf1}</td><td>${stats.displacement_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Visgroup Count</td><td>${stats.visgroup_counts.vmf1}</td><td>${stats.visgroup_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Camera Count</td><td>${stats.camera_counts.vmf1}</td><td>${stats.camera_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Cordon Count</td><td>${stats.cordon_counts.vmf1}</td><td>${stats.cordon_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Connections Count</td><td>${stats.connections_counts.vmf1}</td><td>${stats.connections_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Group Count</td><td>${stats.group_counts.vmf1}</td><td>${stats.group_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Func Detail Count</td><td>${stats.func_detail_counts.vmf1}</td><td>${stats.func_detail_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Areaportal Count</td><td>${stats.areaportal_counts.vmf1}</td><td>${stats.areaportal_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Occluder Count</td><td>${stats.occluder_counts.vmf1}</td><td>${stats.occluder_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Hint Brush Count</td><td>${stats.hint_brush_counts.vmf1}</td><td>${stats.hint_brush_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Ladder Count</td><td>${stats.ladder_counts.vmf1}</td><td>${stats.ladder_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Water Volume Count</td><td>${stats.water_volume_counts.vmf1}</td><td>${stats.water_volume_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Spawn Point Count</td><td>${stats.spawn_point_counts.vmf1}</td><td>${stats.spawn_point_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Buy Zone Count</td><td>${stats.buy_zone_counts.vmf1}</td><td>${stats.buy_zone_counts.vmf2}</td></tr>`;
-        html += `<tr><td>Bombsite Count</td><td>${stats.bombsite_counts.vmf1}</td><td>${stats.bombsite_counts.vmf2}</td></tr>`;
-        html += '</table>';
-
-        // Skybox information
-        html += '<h3>Skybox Information:</h3>';
-        html += '<table class="stats-table">';
-        html += '<tr><th>Property</th><th>VMF 1</th><th>VMF 2</th></tr>';
-        html += `<tr><td>Skyname</td><td>${stats.skybox_info.vmf1.skyname || 'N/A'}</td><td>${stats.skybox_info.vmf2.skyname || 'N/A'}</td></tr>`;
-        if (stats.skybox_info.vmf1.sky_camera || stats.skybox_info.vmf2.sky_camera) {
-            html += `<tr><td>Sky Camera</td><td>${JSON.stringify(stats.skybox_info.vmf1.sky_camera) || 'N/A'}</td><td>${JSON.stringify(stats.skybox_info.vmf2.sky_camera) || 'N/A'}</td></tr>`;
-        }
-        html += '</table>';
-
-        // Entity counts
-        html += '<h3>Entity Counts:</h3>';
-        html += generateEntityCountTable(stats.entity_counts);
-
-        // Texture counts
-        html += '<h3>Texture Usage:</h3>';
-        html += generateTextureCountTable(stats.texture_counts);
-
-        // Smoothing group counts
-        html += '<h3>Smoothing Group Usage:</h3>';
-        html += generateSmoothingGroupTable(stats.smoothing_group_counts);
-
-        // Additional sections
-        html += generateAdditionalSectionTable('Palette Plus Differences', stats.palette_plus_differences || []);
-        html += generateAdditionalSectionTable('Color Correction Plus Differences', stats.colorcorrection_plus_differences || []);
-        html += generateAdditionalSectionTable('Light Plus Differences', stats.light_plus_differences || []);
-        html += generateAdditionalSectionTable('BG Images Plus Differences', stats.bgimages_plus_differences || []);
-        html += generateAdditionalSectionTable('Camera Differences', stats.camera_differences || []);
-        html += generateAdditionalSectionTable('Cordon Differences', stats.cordon_differences || []);
-
-
-        return html;
-    }
-
-    function generateEntityCountTable(entityCounts) {
-        let html = '<table class="stats-table">';
-        html += '<tr><th>Entity Type</th><th>VMF 1 Count</th><th>VMF 2 Count</th></tr>';
-        const allEntities = new Set([...Object.keys(entityCounts.vmf1), ...Object.keys(entityCounts.vmf2)]);
-        allEntities.forEach(entity => {
-            const count1 = entityCounts.vmf1[entity] || 0;
-            const count2 = entityCounts.vmf2[entity] || 0;
-            if (count1 !== count2) {
-                html += `<tr><td>${entity}</td><td>${count1}</td><td>${count2}</td></tr>`;
+    
+        function createPagination(totalPages) {
+            const paginationDiv = document.createElement('div');
+            paginationDiv.className = 'pagination';
+            
+            const prevButton = document.createElement('button');
+            prevButton.textContent = 'Previous';
+            prevButton.disabled = currentPage === 1;
+            prevButton.addEventListener('click', () => displayDifferencesPage(currentPage - 1));
+            paginationDiv.appendChild(prevButton);
+    
+            for (let i = 1; i <= totalPages; i++) {
+                const pageButton = document.createElement('button');
+                pageButton.textContent = i;
+                pageButton.disabled = i === currentPage;
+                pageButton.addEventListener('click', () => displayDifferencesPage(i));
+                paginationDiv.appendChild(pageButton);
             }
-        });
-        html += '</table>';
-        return html;
-    }
-
-    function generateTextureCountTable(textureCounts) {
+    
+            const nextButton = document.createElement('button');
+            nextButton.textContent = 'Next';
+            nextButton.disabled = currentPage === totalPages;
+            nextButton.addEventListener('click', () => displayDifferencesPage(currentPage + 1));
+            paginationDiv.appendChild(nextButton);
+    
+            return paginationDiv;
+        }
+    
+        function generateStatsTable(stats) {
+            let html = '<table class="stats-table">';
+            html += '<tr><th>Statistic</th><th>VMF 1</th><th>VMF 2</th></tr>';
+            html += `<tr><td>Total Differences</td><td colspan="2">${stats.total_differences}</td></tr>`;
+            html += `<tr><td>Vertex Changes</td><td colspan="2">${stats.vertex_changes}</td></tr>`;
+            html += `<tr><td>Max Vertex Deviation</td><td colspan="2">${stats.max_vertex_deviation.toFixed(6)}</td></tr>`;
+            if (stats.vertex_changes > 0) {
+                html += `<tr><td>Average Vertex Deviation</td><td colspan="2">${stats.average_vertex_deviation.toFixed(6)}</td></tr>`;
+            }
+            html += `<tr><td>Brush Count</td><td>${stats.brush_counts.vmf1}</td><td>${stats.brush_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Displacement Count</td><td>${stats.displacement_counts.vmf1}</td><td>${stats.displacement_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Visgroup Count</td><td>${stats.visgroup_counts.vmf1}</td><td>${stats.visgroup_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Camera Count</td><td>${stats.camera_counts.vmf1}</td><td>${stats.camera_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Cordon Count</td><td>${stats.cordon_counts.vmf1}</td><td>${stats.cordon_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Connections Count</td><td>${stats.connections_counts.vmf1}</td><td>${stats.connections_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Group Count</td><td>${stats.group_counts.vmf1}</td><td>${stats.group_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Func Detail Count</td><td>${stats.func_detail_counts.vmf1}</td><td>${stats.func_detail_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Areaportal Count</td><td>${stats.areaportal_counts.vmf1}</td><td>${stats.areaportal_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Occluder Count</td><td>${stats.occluder_counts.vmf1}</td><td>${stats.occluder_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Hint Brush Count</td><td>${stats.hint_brush_counts.vmf1}</td><td>${stats.hint_brush_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Ladder Count</td><td>${stats.ladder_counts.vmf1}</td><td>${stats.ladder_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Water Volume Count</td><td>${stats.water_volume_counts.vmf1}</td><td>${stats.water_volume_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Spawn Point Count</td><td>${stats.spawn_point_counts.vmf1}</td><td>${stats.spawn_point_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Buy Zone Count</td><td>${stats.buy_zone_counts.vmf1}</td><td>${stats.buy_zone_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Bombsite Count</td><td>${stats.bombsite_counts.vmf1}</td><td>${stats.bombsite_counts.vmf2}</td></tr>`;
+            html += '</table>';
+    
+            // Skybox information
+            html += '<h3>Skybox Information:</h3>';
+            html += '<table class="stats-table">';
+            html += '<tr><th>Property</th><th>VMF 1</th><th>VMF 2</th></tr>';
+            html += `<tr><td>Skyname</td><td>${stats.skybox_info.vmf1.skyname || 'N/A'}</td><td>${stats.skybox_info.vmf2.skyname || 'N/A'}</td></tr>`;
+            if (stats.skybox_info.vmf1.sky_camera || stats.skybox_info.vmf2.sky_camera) {
+                html += `<tr><td>Sky Camera</td><td>${JSON.stringify(stats.skybox_info.vmf1.sky_camera) || 'N/A'}</td><td>${JSON.stringify(stats.skybox_info.vmf2.sky_camera) || 'N/A'}</td></tr>`;
+            }
+            html += '</table>';
+    
+            // Entity counts
+            html += '<h3>Entity Counts:</h3>';
+            html += generateEntityCountTable(stats.entity_counts);
+    
+            // Texture counts
+            html += '<h3>Texture Usage:</h3>';
+            html += generateTextureCountTable(stats.texture_counts);
+    
+            // Smoothing group counts
+            html += '<h3>Smoothing Group Usage:</h3>';
+            html += generateSmoothingGroupTable(stats.smoothing_group_counts);
+    
+            // Additional sections
+            html += generateAdditionalSectionTable('Palette Plus Differences', stats.palette_plus_differences || []);
+            html += generateAdditionalSectionTable('Color Correction Plus Differences', stats.colorcorrection_plus_differences || []);
+            html += generateAdditionalSectionTable('Light Plus Differences', stats.light_plus_differences || []);
+            html += generateAdditionalSectionTable('BG Images Plus Differences', stats.bgimages_plus_differences || []);
+            html += generateAdditionalSectionTable('Camera Differences', stats.cameras_differences || []);
+            html += generateAdditionalSectionTable('Cordon Differences', stats.cordons_differences || []);
+    
+            return html;
+        }
+    
+        function generateEntityCountTable(entityCounts) {
+            let html = '<table class="stats-table">';
+            html += '<tr><th>Entity Type</th><th>VMF 1 Count</th><th>VMF 2 Count</th></tr>';
+            const allEntities = new Set([...Object.keys(entityCounts.vmf1), ...Object.keys(entityCounts.vmf2)]);
+            allEntities.forEach(entity => {
+                const count1 = entityCounts.vmf1[entity] || 0;
+                const count2 = entityCounts.vmf2[entity] || 0;
+                if (count1 !== count2) {
+                    html += `<tr><td>${entity}</td><td>${count1}</td><td>${count2}</td></tr>`;
+                }
+            });
+            html += '</table>';
+            return html;
+        }
+    
+        function generateTextureCountTable(textureCounts) {
         let html = '<table class="stats-table">';
         html += '<tr><th>Texture</th><th>VMF 1 Count</th><th>VMF 2 Count</th></tr>';
         const allTextures = new Set([...Object.keys(textureCounts.vmf1), ...Object.keys(textureCounts.vmf2)]);
@@ -425,7 +431,6 @@
         }
         return html;
     }
-
-    </script>
+</script>
 </body>
 </html>

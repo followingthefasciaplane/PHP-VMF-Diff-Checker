@@ -13,7 +13,7 @@ class JobManager {
         $this->config = $config;
     }
 
-    public function createJob($file1, $file2, $ignoreOptions) {
+    public function createJob($file1, $file2, $ignoreOptions, $useStreaming = false) {
         try {
             $this->db->beginTransaction();
 
@@ -28,7 +28,11 @@ class JobManager {
             $this->db->commit();
 
             // Process the job immediately
-            $this->processJob($jobId);
+            if ($useStreaming) {
+                $this->processJobStreaming($jobId);
+            } else {
+                $this->processJob($jobId);
+            }
 
             return $jobId;
         } catch (Exception $e) {
@@ -55,10 +59,69 @@ class JobManager {
             $ignoreOptions = explode(',', $job['ignore_options']);
             
             // Process VMF files
-            $parsedVMF1 = $this->parser->parseVMF($job['file1']);
-            $parsedVMF2 = $this->parser->parseVMF($job['file2']);
+            try {
+                $parsedVMF1 = $this->parser->parseVMF($job['file1']);
+                $parsedVMF2 = $this->parser->parseVMF($job['file2']);
+            } catch (VMFParserException $e) {
+                throw new Exception("Error parsing VMF file: " . $e->getMessage());
+            }
             
             $comparisonResult = $this->comparator->compareVMF($parsedVMF1, $parsedVMF2, $ignoreOptions);
+            
+            // Store results
+            $differences = json_encode($comparisonResult['differences']);
+            $stats = json_encode($comparisonResult['stats']);
+            $this->db->insert('results', [
+                'job_id' => $jobId,
+                'differences' => $differences,
+                'stats' => $stats
+            ]);
+            
+            // Update job status to completed
+            $this->db->update('jobs', ['status' => 'completed'], 'id = ?', [$jobId]);
+
+            $this->db->commit();
+
+            // Clean up files
+            $this->cleanupFiles($job['file1'], $job['file2']);
+
+        } catch (Exception $e) {
+            $this->db->rollback();
+            error_log("Error processing job $jobId: " . $e->getMessage() . "\n" . $e->getTraceAsString());
+            
+            // Update job status to failed
+            $this->db->update('jobs', ['status' => 'failed'], 'id = ?', [$jobId]);
+            
+            // Store error message in results
+            $errorMessage = json_encode(['error' => $e->getMessage()]);
+            $this->db->insert('results', [
+                'job_id' => $jobId,
+                'differences' => $errorMessage,
+                'stats' => $errorMessage
+            ]);
+
+            throw $e;
+        }
+    }
+
+    public function processJobStreaming($jobId) {
+        try {
+            $this->db->beginTransaction();
+
+            // Update job status to processing
+            $this->db->update('jobs', ['status' => 'processing'], 'id = ?', [$jobId]);
+
+            // Get job details
+            $job = $this->db->fetchOne("SELECT file1, file2, ignore_options FROM jobs WHERE id = ?", [$jobId]);
+            
+            if (!$job) {
+                throw new Exception("Job not found");
+            }
+
+            $ignoreOptions = explode(',', $job['ignore_options']);
+            
+            // Process VMF files using streaming
+            $comparisonResult = $this->comparator->compareVMFStreaming($job['file1'], $job['file2'], $ignoreOptions);
             
             // Store results
             $differences = json_encode($comparisonResult['differences']);
@@ -106,7 +169,7 @@ class JobManager {
         }
     }
 
-    public function getJobResult($jobId) {
+    public function fetchGetJobResult($jobId) {
         try {
             $result = $this->db->fetchOne("SELECT differences, stats FROM results WHERE job_id = ?", [$jobId]);
             

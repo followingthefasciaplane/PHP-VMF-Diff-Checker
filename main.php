@@ -10,8 +10,8 @@ spl_autoload_register(function ($class_name) {
 // Initialize objects
 try {
     $db = new Database($config);
-    $parser = new VMFParser();
-    $comparator = new VMFComparator();
+    $parser = new VMFParser($config);
+    $comparator = new VMFComparator($config);
     $jobManager = new JobManager($db, $parser, $comparator, $config);
     $ajaxHandler = new AjaxHandler($jobManager, $config);
 } catch (Exception $e) {
@@ -23,17 +23,21 @@ try {
     if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
         // AJAX request
         header('Content-Type: application/json');
-        echo $ajaxHandler->handleRequest();
+        $result = $ajaxHandler->handleRequest();
+        if ($result === false || $result === null) {
+            throw new Exception("AjaxHandler returned invalid result");
+        }
+        echo $result;
     } else {
         // Normal request - output HTML
         // Don't know what to do with this yet
     }
 } catch (Exception $e) {
     // Log the error
-    error_log("Error processing request: " . $e->getMessage());
+    error_log("Error processing request: " . $e->getMessage() . "\nStack trace: " . $e->getTraceAsString());
     
     if (!empty($_SERVER['HTTP_X_REQUESTED_WITH'])) {
-        echo json_encode(['error' => 'An unexpected error occurred. Please try again later.']);
+        echo json_encode(['error' => 'An unexpected error occurred. Please try again later.', 'details' => $e->getMessage()]);
     } else {
         echo "An unexpected error occurred. Please try again later.";
     }
@@ -51,11 +55,8 @@ try {
         $jobManager->cleanupTemporaryFiles();
     }
 
-    // Reset parser and comparator
-    if (isset($parser)) {
-        $parser->reset();
-    }
-    if (isset($comparator)) {
+    // Reset comparator (if the method exists)
+    if (isset($comparator) && method_exists($comparator, 'reset')) {
         $comparator->reset();
     }
 

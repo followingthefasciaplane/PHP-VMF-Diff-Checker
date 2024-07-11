@@ -14,11 +14,11 @@ class AjaxHandler {
             if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
                 throw new Exception("Invalid request method.");
             }
-
+    
             if (!isset($_POST['action'])) {
                 throw new Exception("No action specified.");
             }
-
+    
             switch ($_POST['action']) {
                 case 'upload':
                     return $this->handleUploadAction();
@@ -30,7 +30,8 @@ class AjaxHandler {
                     throw new Exception("Invalid action specified.");
             }
         } catch (Exception $e) {
-            return $this->jsonResponse(['error' => $e->getMessage()], 400);
+            error_log("AjaxHandler error: " . $e->getMessage() . "\nStack trace: " . $e->getTraceAsString());
+            return $this->jsonResponse(['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()], 400);
         }
     }
 
@@ -48,7 +49,11 @@ class AjaxHandler {
             }
 
             $ignoreOptions = isset($_POST['ignore']) ? explode(',', $_POST['ignore']) : [];
-            $jobId = $this->jobManager->createJob($vmf1Path, $vmf2Path, $ignoreOptions);
+            
+            // Add support for streaming option
+            $useStreaming = isset($_POST['useStreaming']) && $_POST['useStreaming'] === 'true';
+            
+            $jobId = $this->jobManager->createJob($vmf1Path, $vmf2Path, $ignoreOptions, $useStreaming);
 
             return $this->jsonResponse(['jobId' => $jobId]);
         } catch (Exception $e) {
@@ -89,7 +94,7 @@ class AjaxHandler {
                 throw new Exception("Invalid job ID.");
             }
 
-            $result = $this->jobManager->getJobResult($jobId);
+            $result = $this->jobManager->fetchGetJobResult($jobId);
             if (!$result) {
                 throw new Exception("No results found for this job ID.");
             }
@@ -103,6 +108,11 @@ class AjaxHandler {
     private function jsonResponse($data, $statusCode = 200) {
         http_response_code($statusCode);
         header('Content-Type: application/json');
-        return json_encode($data);
+        $json = json_encode($data);
+        if ($json === false) {
+            error_log("JSON encode error: " . json_last_error_msg());
+            return json_encode(['error' => 'Internal server error']);
+        }
+        return $json;
     }
 }
