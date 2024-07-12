@@ -51,6 +51,8 @@ class VMFParser {
             'colorcorrection_plus' => [],
             'light_plus' => [],
             'bgimages_plus' => [],
+            'skybox_info' => [],
+            'map_bounds' => [],
         ];
     
         while ($this->currentToken !== null) {
@@ -69,7 +71,6 @@ class VMFParser {
                     switch ($sectionName) {
                         case 'versioninfo':
                         case 'viewsettings':
-                        case 'world':
                         case 'cordon':
                         case 'cordons':
                         case 'palette_plus':
@@ -77,6 +78,11 @@ class VMFParser {
                         case 'light_plus':
                         case 'bgimages_plus':
                             $document[$sectionName] = $section['content'];
+                            break;
+                        case 'world':
+                            $document[$sectionName] = $section['content'];
+                            $document['skybox_info'] = $this->parseSkyboxInfo($section['content']);
+                            $document['map_bounds'] = $this->parseMapBounds($section['content']);
                             break;
                         case 'visgroups':
                         case 'cameras':
@@ -189,6 +195,58 @@ class VMFParser {
         } else {
             $this->getNextToken();
             return null;
+        }
+    }
+
+    private function parseSkyboxInfo($world) {
+        $skyboxInfo = [
+            'skyname' => $world['skyname'] ?? null,
+            'sky_camera' => null
+        ];
+
+        if (isset($world['entities'])) {
+            foreach ($world['entities'] as $entity) {
+                if (isset($entity['classname']) && $entity['classname'] === 'sky_camera') {
+                    $skyboxInfo['sky_camera'] = $entity;
+                    break;
+                }
+            }
+        }
+
+        return $skyboxInfo;
+    }
+
+    private function parseMapBounds($world) {
+        $bounds = [
+            'min' => [PHP_FLOAT_MAX, PHP_FLOAT_MAX, PHP_FLOAT_MAX],
+            'max' => [PHP_FLOAT_MIN, PHP_FLOAT_MIN, PHP_FLOAT_MIN]
+        ];
+
+        $this->updateBoundsFromBrushes($world, $bounds);
+        if (isset($world['entities'])) {
+            foreach ($world['entities'] as $entity) {
+                $this->updateBoundsFromBrushes($entity, $bounds);
+            }
+        }
+
+        return $bounds;
+    }
+
+    private function updateBoundsFromBrushes($container, &$bounds) {
+        if (isset($container['solid'])) {
+            $solids = is_array($container['solid']) ? $container['solid'] : [$container['solid']];
+            foreach ($solids as $solid) {
+                if (isset($solid['vertices_plus'])) {
+                    foreach ($solid['vertices_plus'] as $vertexSet) {
+                        foreach ($vertexSet as $vertex) {
+                            for ($i = 0; $i < 3; $i++) {
+                                $bounds['min'][$i] = min($bounds['min'][$i], $vertex[$i]);
+                                $bounds['max'][$i] = max($bounds['max'][$i], $vertex[$i]);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
