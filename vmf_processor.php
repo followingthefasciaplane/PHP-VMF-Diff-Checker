@@ -36,7 +36,7 @@ try {
         echo $result;
     } else {
         // Normal request - output HTML
-        include 'index.html';
+        // include 'index.html';
     }
 } catch (Exception $e) {
     logError("Error processing request", $e);
