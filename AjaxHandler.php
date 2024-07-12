@@ -31,7 +31,7 @@ class AjaxHandler {
             }
         } catch (Exception $e) {
             error_log("AjaxHandler error: " . $e->getMessage() . "\nStack trace: " . $e->getTraceAsString());
-            return $this->jsonResponse(['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()], 400);
+            return $this->jsonResponse(['error' => $e->getMessage()], 400);
         }
     }
 
@@ -48,9 +48,8 @@ class AjaxHandler {
                 throw new Exception("File upload failed.");
             }
 
-            $ignoreOptions = isset($_POST['ignore']) ? explode(',', $_POST['ignore']) : [];
+            $ignoreOptions = isset($_POST['ignore']) ? array_map('trim', explode(',', $_POST['ignore'])) : [];
             
-            // Add support for streaming option
             $useStreaming = isset($_POST['useStreaming']) && $_POST['useStreaming'] === 'true';
             
             $jobId = $this->jobManager->createJob($vmf1Path, $vmf2Path, $ignoreOptions, $useStreaming);
@@ -108,7 +107,7 @@ class AjaxHandler {
     private function jsonResponse($data, $statusCode = 200) {
         http_response_code($statusCode);
         header('Content-Type: application/json');
-        $json = json_encode($data);
+        $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         if ($json === false) {
             error_log("JSON encode error: " . json_last_error_msg());
             return json_encode(['error' => 'Internal server error']);

@@ -3,44 +3,58 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VMF Diff Checker for Counter-Strike: Source</title>
+    <title>Advanced VMF Diff Checker for Counter-Strike: Source</title>
     <style>
+        :root {
+            --primary-color: #3498db;
+            --secondary-color: #2c3e50;
+            --background-color: #ecf0f1;
+            --text-color: #333;
+            --border-color: #bdc3c7;
+        }
         body {
-            font-family: Arial, sans-serif;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             line-height: 1.6;
-            color: #333;
+            color: var(--text-color);
             max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
+            background-color: var(--background-color);
         }
         h1, h2, h3 {
-            color: #2c3e50;
+            color: var(--secondary-color);
         }
         form {
-            background-color: #f9f9f9;
+            background-color: #fff;
             padding: 20px;
-            border-radius: 5px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             margin-bottom: 20px;
         }
         input[type="file"], input[type="text"] {
-            margin-bottom: 10px;
+            margin-bottom: 15px;
             width: 100%;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
         }
         button {
-            background-color: #3498db;
+            background-color: var(--primary-color);
             color: white;
             padding: 10px 15px;
             border: none;
-            border-radius: 3px;
+            border-radius: 4px;
             cursor: pointer;
+            transition: background-color 0.3s;
         }
         button:hover {
             background-color: #2980b9;
         }
         #results {
-            background-color: #ecf0f1;
+            background-color: #fff;
             padding: 20px;
-            border-radius: 5px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         .stats-table {
             width: 100%;
@@ -48,8 +62,8 @@
             margin-bottom: 20px;
         }
         .stats-table th, .stats-table td {
-            border: 1px solid #ddd;
-            padding: 8px;
+            border: 1px solid var(--border-color);
+            padding: 10px;
             text-align: left;
         }
         .stats-table th {
@@ -57,14 +71,16 @@
         }
         .difference-section {
             margin-bottom: 20px;
-            padding: 10px;
-            background-color: #f0f0f0;
-            border-radius: 5px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
         }
         .difference {
-            margin-bottom: 10px;
+            margin-bottom: 15px;
             padding: 10px;
-            border-radius: 3px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
         }
         .removed { background-color: #ffe6e6; }
         .added { background-color: #e6ffe6; }
@@ -76,6 +92,7 @@
             padding: 20px;
             font-size: 18px;
             font-weight: bold;
+            color: var(--secondary-color);
         }
         .pagination {
             display: flex;
@@ -86,49 +103,65 @@
             margin: 0 5px;
         }
         .checkbox-container {
-            margin-bottom: 10px;
+            margin-bottom: 15px;
+        }
+        .progress-bar {
+            width: 100%;
+            background-color: #e0e0e0;
+            padding: 3px;
+            border-radius: 3px;
+            box-shadow: inset 0 1px 3px rgba(0, 0, 0, .2);
+        }
+        .progress-bar-fill {
+            display: block;
+            height: 22px;
+            background-color: var(--primary-color);
+            border-radius: 3px;
+            transition: width 500ms ease-in-out;
         }
     </style>
 </head>
 <body>
-    <h1>VMF Diff Checker for Counter-Strike: Source</h1>
+    <h1>Advanced VMF Diff Checker for Counter-Strike: Source</h1>
     <form id="vmfForm" enctype="multipart/form-data">
+        <h3>Upload VMF Files</h3>
         <input type="file" name="vmf1" accept=".vmf" required>
         <input type="file" name="vmf2" accept=".vmf" required>
         <input type="text" name="ignore" placeholder="Paths to ignore (comma-separated, supports wildcards)">
         <div class="checkbox-container">
-            <input type="checkbox" id="useStreaming" name="useStreaming">
+            <input type="checkbox" id="useStreaming" name="useStreaming" checked>
             <label for="useStreaming">Use streaming processing (recommended for large files)</label>
         </div>
         <button type="submit">Compare VMFs</button>
     </form>
     <div id="jobStatus"></div>
-    <div id="loading">Processing... This may take a while for large files.</div>
+    <div id="loading">
+        <p>Processing... This may take a while for large files.</p>
+        <div class="progress-bar">
+            <span class="progress-bar-fill" style="width: 0%;"></span>
+        </div>
+    </div>
     <div id="results"></div>
 
     <script>
         let jobId = null;
         let allDifferences = {};
-        const itemsPerPage = 100; // This should match the value in your PHP config
+        const itemsPerPage = 100;
         let currentPage = 1;
-        const jobCheckInterval = 20000; // 20 seconds in milliseconds, matching the PHP config
-    
+        const jobCheckInterval = 5000; // 5 seconds
+
         document.getElementById('vmfForm').addEventListener('submit', function(e) {
             e.preventDefault();
             const formData = new FormData(this);
             formData.append('action', 'upload');
-            formData.append('useStreaming', document.getElementById('useStreaming').checked);
             
             document.getElementById('loading').style.display = 'block';
             document.getElementById('results').innerHTML = '';
             document.getElementById('jobStatus').style.display = 'none';
-    
-            fetch('main.php', {
+            
+            fetch('vmf_processor.php', {
                 method: 'POST',
-                body: formData,
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
+                body: formData
             })
             .then(response => response.json())
             .then(data => {
@@ -140,30 +173,25 @@
             })
             .catch(error => {
                 console.error('Error:', error);
-                alert('An error occurred while processing the request: ' + error.message);
+                alert('An error occurred: ' + error.message);
                 document.getElementById('loading').style.display = 'none';
             });
         });
-    
+
         function checkJobStatus() {
             if (!jobId) return;
             
-            const formData = new FormData();
-            formData.append('action', 'status');
-            formData.append('jobId', jobId);
-            
-            fetch('main.php', {
-                method: 'POST',
-                body: formData,
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
-            })
+            fetch(`vmf_processor.php?action=status&jobId=${jobId}`)
             .then(response => response.json())
             .then(data => {
                 const jobStatusDiv = document.getElementById('jobStatus');
                 jobStatusDiv.style.display = 'block';
                 jobStatusDiv.textContent = `Job Status: ${data.status}`;
+                
+                if (data.progress) {
+                    updateProgressBar(data.progress);
+                }
+                
                 if (data.status === 'completed') {
                     document.getElementById('loading').style.display = 'none';
                     getJobResult();
@@ -180,21 +208,16 @@
                 document.getElementById('loading').style.display = 'none';
             });
         }
-    
+
+        function updateProgressBar(progress) {
+            const progressBar = document.querySelector('.progress-bar-fill');
+            progressBar.style.width = `${progress}%`;
+        }
+
         function getJobResult() {
             if (!jobId) return;
             
-            const formData = new FormData();
-            formData.append('action', 'result');
-            formData.append('jobId', jobId);
-            
-            fetch('main.php', {
-                method: 'POST',
-                body: formData,
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
-                }
-            })
+            fetch(`vmf_processor.php?action=result&jobId=${jobId}`)
             .then(response => response.json())
             .then(data => {
                 if (data.error) {
@@ -205,44 +228,44 @@
             })
             .catch(error => {
                 console.error('Error:', error);
-                alert('An error occurred while fetching job results: ' + error.message);
+                alert('An error occurred while fetching results: ' + error.message);
                 document.getElementById('loading').style.display = 'none';
             });
         }
-    
+
         function displayResults(data) {
             const resultsDiv = document.getElementById('results');
-            resultsDiv.innerHTML = '';
-    
+            resultsDiv.innerHTML = '<h2>Comparison Results</h2>';
+
             if (data.error) {
-                resultsDiv.innerHTML = `<h2>Error:</h2><p>${data.error}</p>`;
+                resultsDiv.innerHTML += `<p class="error">Error: ${data.error}</p>`;
                 return;
             }
-    
+
             // Display statistics
-            resultsDiv.innerHTML += '<h2>Statistics:</h2>';
+            resultsDiv.innerHTML += '<h3>Statistics</h3>';
             resultsDiv.innerHTML += generateStatsTable(data.stats);
-    
+
             // Display differences
-            resultsDiv.innerHTML += '<h2>Differences:</h2>';
+            resultsDiv.innerHTML += '<h3>Differences</h3>';
             displayDifferencesPage(1);
         }
-    
+
         function displayDifferencesPage(page) {
             const resultsDiv = document.getElementById('results');
             const differenceSection = document.createElement('div');
             differenceSection.id = 'difference-section';
             resultsDiv.appendChild(differenceSection);
-    
+
             currentPage = page;
             let totalDifferences = 0;
-    
+
             ['removed', 'added', 'changed', 'vertex_changed'].forEach(type => {
                 if (allDifferences[type] && allDifferences[type].length > 0) {
                     totalDifferences += allDifferences[type].length;
                     const sectionDiv = document.createElement('div');
                     sectionDiv.className = 'difference-section';
-                    sectionDiv.innerHTML = `<h3>${type.charAt(0).toUpperCase() + type.slice(1)} Elements (${allDifferences[type].length}):</h3>`;
+                    sectionDiv.innerHTML = `<h4>${type.charAt(0).toUpperCase() + type.slice(1)} Elements (${allDifferences[type].length}):</h4>`;
                     
                     const startIndex = (page - 1) * itemsPerPage;
                     const endIndex = startIndex + itemsPerPage;
@@ -250,14 +273,10 @@
                     allDifferences[type].slice(startIndex, endIndex).forEach(diff => {
                         const diffDiv = document.createElement('div');
                         diffDiv.className = `difference ${type}`;
-                        let content = `<strong>ID:</strong> ${diff.id || 'N/A'}<br>`;
-                        content += `<strong>Path:</strong> ${diff.path}<br>`;
+                        let content = `<strong>Path:</strong> ${diff.path}<br>`;
                         if (diff.old_value !== undefined) content += `<strong>Old Value:</strong> ${JSON.stringify(diff.old_value)}<br>`;
                         if (diff.new_value !== undefined) content += `<strong>New Value:</strong> ${JSON.stringify(diff.new_value)}<br>`;
                         if (diff.value !== undefined) content += `<strong>Value:</strong> ${JSON.stringify(diff.value)}<br>`;
-                        if (diff.difference) {
-                            content += displayVertexDifferences(diff.difference);
-                        }
                         diffDiv.innerHTML = content;
                         sectionDiv.appendChild(diffDiv);
                     });
@@ -273,14 +292,7 @@
                 differenceSection.appendChild(createPagination(totalPages));
             }
         }
-    
-        function displayVertexDifferences(diff) {
-            let content = `<strong>Vertices Changed:</strong> ${diff.changed_count}<br>`;
-            content += `<strong>Max Difference:</strong> ${diff.max_deviation.toFixed(6)}<br>`;
-            content += `<strong>Avg Difference:</strong> ${diff.avg_deviation.toFixed(6)}<br>`;
-            return content;
-        }
-    
+
         function createPagination(totalPages) {
             const paginationDiv = document.createElement('div');
             paginationDiv.className = 'pagination';
@@ -290,7 +302,7 @@
             prevButton.disabled = currentPage === 1;
             prevButton.addEventListener('click', () => displayDifferencesPage(currentPage - 1));
             paginationDiv.appendChild(prevButton);
-    
+
             for (let i = 1; i <= totalPages; i++) {
                 const pageButton = document.createElement('button');
                 pageButton.textContent = i;
@@ -298,31 +310,29 @@
                 pageButton.addEventListener('click', () => displayDifferencesPage(i));
                 paginationDiv.appendChild(pageButton);
             }
-    
+
             const nextButton = document.createElement('button');
             nextButton.textContent = 'Next';
             nextButton.disabled = currentPage === totalPages;
             nextButton.addEventListener('click', () => displayDifferencesPage(currentPage + 1));
             paginationDiv.appendChild(nextButton);
-    
+
             return paginationDiv;
         }
-    
+
         function generateStatsTable(stats) {
             let html = '<table class="stats-table">';
             html += '<tr><th>Statistic</th><th>VMF 1</th><th>VMF 2</th></tr>';
             html += `<tr><td>Total Differences</td><td colspan="2">${stats.total_differences}</td></tr>`;
-            html += `<tr><td>Vertex Changes</td><td colspan="2">${stats.vertex_changes}</td></tr>`;
-            html += `<tr><td>Max Vertex Deviation</td><td colspan="2">${stats.max_vertex_deviation.toFixed(6)}</td></tr>`;
-            if (stats.vertex_changes > 0) {
-                html += `<tr><td>Average Vertex Deviation</td><td colspan="2">${stats.average_vertex_deviation.toFixed(6)}</td></tr>`;
-            }
             html += `<tr><td>Brush Count</td><td>${stats.brush_counts.vmf1}</td><td>${stats.brush_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Entity Count</td><td>${Object.values(stats.entity_counts.vmf1).reduce((a, b) => a + b, 0)}</td><td>${Object.values(stats.entity_counts.vmf2).reduce((a, b) => a + b, 0)}</td></tr>`;
+            html += `<tr><td>Texture Count</td><td>${Object.keys(stats.texture_counts.vmf1).length}</td><td>${Object.keys(stats.texture_counts.vmf2).length}</td></tr>`;
             html += `<tr><td>Displacement Count</td><td>${stats.displacement_counts.vmf1}</td><td>${stats.displacement_counts.vmf2}</td></tr>`;
             html += `<tr><td>Visgroup Count</td><td>${stats.visgroup_counts.vmf1}</td><td>${stats.visgroup_counts.vmf2}</td></tr>`;
             html += `<tr><td>Camera Count</td><td>${stats.camera_counts.vmf1}</td><td>${stats.camera_counts.vmf2}</td></tr>`;
             html += `<tr><td>Cordon Count</td><td>${stats.cordon_counts.vmf1}</td><td>${stats.cordon_counts.vmf2}</td></tr>`;
-            html += `<tr><td>Connections Count</td><td>${stats.connections_counts.vmf1}</td><td>${stats.connections_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Vertex Count</td><td>${stats.vertex_counts.vmf1}</td><td>${stats.vertex_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Connection Count</td><td>${stats.connections_counts.vmf1}</td><td>${stats.connections_counts.vmf2}</td></tr>`;
             html += `<tr><td>Group Count</td><td>${stats.group_counts.vmf1}</td><td>${stats.group_counts.vmf2}</td></tr>`;
             html += `<tr><td>Func Detail Count</td><td>${stats.func_detail_counts.vmf1}</td><td>${stats.func_detail_counts.vmf2}</td></tr>`;
             html += `<tr><td>Areaportal Count</td><td>${stats.areaportal_counts.vmf1}</td><td>${stats.areaportal_counts.vmf2}</td></tr>`;
@@ -333,104 +343,141 @@
             html += `<tr><td>Spawn Point Count</td><td>${stats.spawn_point_counts.vmf1}</td><td>${stats.spawn_point_counts.vmf2}</td></tr>`;
             html += `<tr><td>Buy Zone Count</td><td>${stats.buy_zone_counts.vmf1}</td><td>${stats.buy_zone_counts.vmf2}</td></tr>`;
             html += `<tr><td>Bombsite Count</td><td>${stats.bombsite_counts.vmf1}</td><td>${stats.bombsite_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Hostage Rescue Zone Count</td><td>${stats.hostage_rescue_zone_counts.vmf1}</td><td>${stats.hostage_rescue_zone_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Hostage Count</td><td>${stats.hostage_counts.vmf1}</td><td>${stats.hostage_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Weapon Spawn Count</td><td>${stats.weapon_spawn_counts.vmf1}</td><td>${stats.weapon_spawn_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Light Entity Count</td><td>${stats.light_entity_counts.vmf1}</td><td>${stats.light_entity_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Trigger Entity Count</td><td>${stats.trigger_entity_counts.vmf1}</td><td>${stats.trigger_entity_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Instance Count</td><td>${stats.instance_counts.vmf1}</td><td>${stats.instance_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Custom Visgroup Count</td><td>${stats.custom_visgroup_counts.vmf1}</td><td>${stats.custom_visgroup_counts.vmf2}</td></tr>`;
+            
+            // New statistics
+            html += `<tr><td>Total Side Count</td><td>${stats.total_side_count.vmf1}</td><td>${stats.total_side_count.vmf2}</td></tr>`;
+            html += `<tr><td>Total Texture Count</td><td>${stats.total_texture_count.vmf1}</td><td>${stats.total_texture_count.vmf2}</td></tr>`;
+            html += `<tr><td>Unique Texture Count</td><td>${stats.unique_texture_count.vmf1}</td><td>${stats.unique_texture_count.vmf2}</td></tr>`;
+            html += `<tr><td>Cordons Active</td><td>${stats.cordons_active.vmf1}</td><td>${stats.cordons_active.vmf2}</td></tr>`;
+            
+            // Hammer++ specific stats
+            html += `<tr><td>Palette Plus Count</td><td>${stats.palette_plus_counts.vmf1}</td><td>${stats.palette_plus_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Color Correction Plus Count</td><td>${stats.colorcorrection_plus_counts.vmf1}</td><td>${stats.colorcorrection_plus_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Light Plus Count</td><td>${stats.light_plus_counts.vmf1}</td><td>${stats.light_plus_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Background Images Plus Count</td><td>${stats.bgimages_plus_counts.vmf1}</td><td>${stats.bgimages_plus_counts.vmf2}</td></tr>`;
+            html += `<tr><td>Instance Parameter Count</td><td>${stats.instance_parameter_counts.vmf1}</td><td>${stats.instance_parameter_counts.vmf2}</td></tr>`;
+            
             html += '</table>';
-    
-            // Skybox information
-            html += '<h3>Skybox Information:</h3>';
-            html += '<table class="stats-table">';
-            html += '<tr><th>Property</th><th>VMF 1</th><th>VMF 2</th></tr>';
-            html += `<tr><td>Skyname</td><td>${stats.skybox_info.vmf1.skyname || 'N/A'}</td><td>${stats.skybox_info.vmf2.skyname || 'N/A'}</td></tr>`;
-            if (stats.skybox_info.vmf1.sky_camera || stats.skybox_info.vmf2.sky_camera) {
-                html += `<tr><td>Sky Camera</td><td>${JSON.stringify(stats.skybox_info.vmf1.sky_camera) || 'N/A'}</td><td>${JSON.stringify(stats.skybox_info.vmf2.sky_camera) || 'N/A'}</td></tr>`;
-            }
-            html += '</table>';
-    
+
             // Entity counts
             html += '<h3>Entity Counts:</h3>';
             html += generateEntityCountTable(stats.entity_counts);
-    
+
             // Texture counts
             html += '<h3>Texture Usage:</h3>';
             html += generateTextureCountTable(stats.texture_counts);
-    
+
             // Smoothing group counts
             html += '<h3>Smoothing Group Usage:</h3>';
-            html += generateSmoothingGroupTable(stats.smoothing_group_counts);
-    
-            // Additional sections
-            html += generateAdditionalSectionTable('Palette Plus Differences', stats.palette_plus_differences || []);
-            html += generateAdditionalSectionTable('Color Correction Plus Differences', stats.colorcorrection_plus_differences || []);
-            html += generateAdditionalSectionTable('Light Plus Differences', stats.light_plus_differences || []);
-            html += generateAdditionalSectionTable('BG Images Plus Differences', stats.bgimages_plus_differences || []);
-            html += generateAdditionalSectionTable('Camera Differences', stats.cameras_differences || []);
-            html += generateAdditionalSectionTable('Cordon Differences', stats.cordons_differences || []);
-    
+            html += generateSmoothingGroupCountTable(stats.smoothing_group_counts);
+
+            // Skybox info
+            html += '<h3>Skybox Information:</h3>';
+            html += generateSkyboxInfoTable(stats.skybox_info);
+
+            // Map bounds
+            html += '<h3>Map Bounds:</h3>';
+            html += generateMapBoundsTable(stats.map_bounds);
+
+            // Version info
+            html += '<h3>Version Info:</h3>';
+            html += '<table class="stats-table">';
+            html += '<tr><th>Property</th><th>VMF 1</th><th>VMF 2</th></tr>';
+            for (let prop in stats.version_info.vmf1) {
+                html += `<tr><td>${prop}</td><td>${stats.version_info.vmf1[prop]}</td><td>${stats.version_info.vmf2[prop]}</td></tr>`;
+            }
+            html += '</table>';
+
             return html;
         }
-    
+
         function generateEntityCountTable(entityCounts) {
             let html = '<table class="stats-table">';
-            html += '<tr><th>Entity Type</th><th>VMF 1 Count</th><th>VMF 2 Count</th></tr>';
+            html += '<tr><th>Entity Type</th><th>VMF 1 Count</th><th>VMF 2 Count</th><th>Difference</th></tr>';
             const allEntities = new Set([...Object.keys(entityCounts.vmf1), ...Object.keys(entityCounts.vmf2)]);
-            allEntities.forEach(entity => {
+            Array.from(allEntities).sort().forEach(entity => {
                 const count1 = entityCounts.vmf1[entity] || 0;
                 const count2 = entityCounts.vmf2[entity] || 0;
+                const difference = count2 - count1;
                 if (count1 !== count2) {
-                    html += `<tr><td>${entity}</td><td>${count1}</td><td>${count2}</td></tr>`;
+                    html += `<tr><td>${entity}</td><td>${count1}</td><td>${count2}</td><td>${difference > 0 ? '+' : ''}${difference}</td></tr>`;
                 }
             });
             html += '</table>';
             return html;
         }
-    
+
+
         function generateTextureCountTable(textureCounts) {
-        let html = '<table class="stats-table">';
-        html += '<tr><th>Texture</th><th>VMF 1 Count</th><th>VMF 2 Count</th></tr>';
-        const allTextures = new Set([...Object.keys(textureCounts.vmf1), ...Object.keys(textureCounts.vmf2)]);
-        allTextures.forEach(texture => {
-            const count1 = textureCounts.vmf1[texture] || 0;
-            const count2 = textureCounts.vmf2[texture] || 0;
-            if (count1 !== count2) {
-                html += `<tr><td>${texture}</td><td>${count1}</td><td>${count2}</td></tr>`;
-            }
-        });
-        html += '</table>';
-        return html;
-    }
-
-    function generateSmoothingGroupTable(smoothingGroups) {
-        let html = '<table class="stats-table">';
-        html += '<tr><th>Smoothing Group</th><th>VMF 1 Count</th><th>VMF 2 Count</th></tr>';
-        const allGroups = new Set([...Object.keys(smoothingGroups.vmf1), ...Object.keys(smoothingGroups.vmf2)]);
-        allGroups.forEach(group => {
-            const count1 = smoothingGroups.vmf1[group] || 0;
-            const count2 = smoothingGroups.vmf2[group] || 0;
-            if (count1 !== count2) {
-                html += `<tr><td>${group}</td><td>${count1}</td><td>${count2}</td></tr>`;
-            }
-        });
-        html += '</table>';
-        return html;
-    }
-
-    function generateAdditionalSectionTable(title, differences) {
-        let html = `<h3>${title}:</h3>`;
-        if (!Array.isArray(differences) || differences.length === 0) {
-            html += '<p>No differences found.</p>';
-        } else {
-            html += '<table class="stats-table">';
-            html += '<tr><th>Type</th><th>Key</th><th>Old Value</th><th>New Value</th></tr>';
-            differences.forEach(diff => {
-                const type = Object.keys(diff)[0];
-                const key = Object.keys(diff[type])[0];
-                const oldValue = diff[type][key].old || diff[type][key];
-                const newValue = diff[type][key].new || '';
-                html += `<tr><td>${type}</td><td>${key}</td><td>${JSON.stringify(oldValue)}</td><td>${JSON.stringify(newValue)}</td></tr>`;
+            let html = '<table class="stats-table">';
+            html += '<tr><th>Texture</th><th>VMF 1 Count</th><th>VMF 2 Count</th><th>Difference</th></tr>';
+            const allTextures = new Set([...Object.keys(textureCounts.vmf1), ...Object.keys(textureCounts.vmf2)]);
+            Array.from(allTextures).sort().forEach(texture => {
+                const count1 = textureCounts.vmf1[texture] || 0;
+                const count2 = textureCounts.vmf2[texture] || 0;
+                const difference = count2 - count1;
+                if (count1 !== count2) {
+                    html += `<tr><td>${texture}</td><td>${count1}</td><td>${count2}</td><td>${difference > 0 ? '+' : ''}${difference}</td></tr>`;
+                }
             });
             html += '</table>';
+            return html;
         }
-        return html;
-    }
-</script>
+
+        function generateSmoothingGroupCountTable(smoothingGroupCounts) {
+            let html = '<table class="stats-table">';
+            html += '<tr><th>Smoothing Group</th><th>VMF 1 Count</th><th>VMF 2 Count</th><th>Difference</th></tr>';
+            const allGroups = new Set([...Object.keys(smoothingGroupCounts.vmf1), ...Object.keys(smoothingGroupCounts.vmf2)]);
+            Array.from(allGroups).sort((a, b) => parseInt(a) - parseInt(b)).forEach(group => {
+                const count1 = smoothingGroupCounts.vmf1[group] || 0;
+                const count2 = smoothingGroupCounts.vmf2[group] || 0;
+                const difference = count2 - count1;
+                if (count1 !== count2) {
+                    html += `<tr><td>${group}</td><td>${count1}</td><td>${count2}</td><td>${difference > 0 ? '+' : ''}${difference}</td></tr>`;
+                }
+            });
+            html += '</table>';
+            return html;
+        }
+
+        function generateSkyboxInfoTable(skyboxInfo) {
+            let html = '<table class="stats-table">';
+            html += '<tr><th>Property</th><th>VMF 1</th><th>VMF 2</th></tr>';
+            html += `<tr><td>Skyname</td><td>${skyboxInfo.vmf1.skyname || 'N/A'}</td><td>${skyboxInfo.vmf2.skyname || 'N/A'}</td></tr>`;
+            if (skyboxInfo.vmf1.sky_camera || skyboxInfo.vmf2.sky_camera) {
+                const allKeys = new Set([
+                    ...Object.keys(skyboxInfo.vmf1.sky_camera || {}),
+                    ...Object.keys(skyboxInfo.vmf2.sky_camera || {})
+                ]);
+                allKeys.forEach(key => {
+                    const value1 = skyboxInfo.vmf1.sky_camera ? skyboxInfo.vmf1.sky_camera[key] : 'N/A';
+                    const value2 = skyboxInfo.vmf2.sky_camera ? skyboxInfo.vmf2.sky_camera[key] : 'N/A';
+                    html += `<tr><td>Sky Camera ${key}</td><td>${value1}</td><td>${value2}</td></tr>`;
+                });
+            }
+            html += '</table>';
+            return html;
+        }
+
+        function generateMapBoundsTable(mapBounds) {
+            let html = '<table class="stats-table">';
+            html += '<tr><th>Bound</th><th>VMF 1</th><th>VMF 2</th></tr>';
+            html += `<tr><td>Min X</td><td>${mapBounds.vmf1.min[0]}</td><td>${mapBounds.vmf2.min[0]}</td></tr>`;
+            html += `<tr><td>Min Y</td><td>${mapBounds.vmf1.min[1]}</td><td>${mapBounds.vmf2.min[1]}</td></tr>`;
+            html += `<tr><td>Min Z</td><td>${mapBounds.vmf1.min[2]}</td><td>${mapBounds.vmf2.min[2]}</td></tr>`;
+            html += `<tr><td>Max X</td><td>${mapBounds.vmf1.max[0]}</td><td>${mapBounds.vmf2.max[0]}</td></tr>`;
+            html += `<tr><td>Max Y</td><td>${mapBounds.vmf1.max[1]}</td><td>${mapBounds.vmf2.max[1]}</td></tr>`;
+            html += `<tr><td>Max Z</td><td>${mapBounds.vmf1.max[2]}</td><td>${mapBounds.vmf2.max[2]}</td></tr>`;
+            html += '</table>';
+            return html;
+        }
+    </script>
 </body>
 </html>

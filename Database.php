@@ -1,4 +1,5 @@
 <?php
+
 class Database {
     private $mysqli;
     private $config;
@@ -25,7 +26,7 @@ class Database {
     }
 
     private function createTables() {
-        $this->mysqli->query("CREATE TABLE IF NOT EXISTS jobs (
+        $this->query("CREATE TABLE IF NOT EXISTS jobs (
             id INT AUTO_INCREMENT PRIMARY KEY,
             status ENUM('pending', 'processing', 'completed', 'failed') NOT NULL,
             file1 VARCHAR(255) NOT NULL,
@@ -35,11 +36,12 @@ class Database {
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
         )");
 
-        $this->mysqli->query("CREATE TABLE IF NOT EXISTS results (
+        $this->query("CREATE TABLE IF NOT EXISTS results (
             id INT AUTO_INCREMENT PRIMARY KEY,
             job_id INT,
             differences LONGTEXT,
             stats LONGTEXT,
+            error TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
         )");
@@ -67,15 +69,30 @@ class Database {
     }
 
     public function insert($table, $data) {
+        $allowedTables = ['jobs', 'results']; // Whitelist of allowed tables
+        if (!in_array($table, $allowedTables)) {
+            throw new Exception("Invalid table name");
+        }
+
         $keys = array_keys($data);
         $values = array_values($data);
         $sql = "INSERT INTO $table (" . implode(", ", $keys) . ") VALUES (" . implode(", ", array_fill(0, count($keys), "?")) . ")";
         
-        $this->query($sql, $values);
-        return $this->mysqli->insert_id;
+        try {
+            $this->query($sql, $values);
+            return $this->mysqli->insert_id;
+        } catch (Exception $e) {
+            error_log("Error in insert method: " . $e->getMessage());
+            throw $e;
+        }
     }
 
     public function update($table, $data, $where, $whereParams = []) {
+        $allowedTables = ['jobs', 'results']; // Whitelist of allowed tables
+        if (!in_array($table, $allowedTables)) {
+            throw new Exception("Invalid table name");
+        }
+
         $set = [];
         foreach ($data as $key => $value) {
             $set[] = "$key = ?";
@@ -83,18 +100,33 @@ class Database {
         $sql = "UPDATE $table SET " . implode(", ", $set) . " WHERE $where";
         
         $params = array_merge(array_values($data), $whereParams);
-        $this->query($sql, $params);
-        return $this->mysqli->affected_rows;
+        try {
+            $this->query($sql, $params);
+            return $this->mysqli->affected_rows;
+        } catch (Exception $e) {
+            error_log("Error in update method: " . $e->getMessage());
+            throw $e;
+        }
     }
 
     public function fetchOne($sql, $params = []) {
-        $result = $this->query($sql, $params);
-        return $result->fetch_assoc();
+        try {
+            $result = $this->query($sql, $params);
+            return $result->fetch_assoc();
+        } catch (Exception $e) {
+            error_log("Error in fetchOne method: " . $e->getMessage());
+            throw $e;
+        }
     }
 
     public function fetchAll($sql, $params = []) {
-        $result = $this->query($sql, $params);
-        return $result->fetch_all(MYSQLI_ASSOC);
+        try {
+            $result = $this->query($sql, $params);
+            return $result->fetch_all(MYSQLI_ASSOC);
+        } catch (Exception $e) {
+            error_log("Error in fetchAll method: " . $e->getMessage());
+            throw $e;
+        }
     }
 
     public function beginTransaction() {
@@ -115,5 +147,9 @@ class Database {
 
     public function close() {
         $this->mysqli->close();
+    }
+
+    public function isTransactionActive() {
+        return $this->mysqli->get_autocommit() === false;
     }
 }

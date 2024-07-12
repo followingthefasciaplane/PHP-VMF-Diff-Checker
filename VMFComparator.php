@@ -1,236 +1,41 @@
 <?php
+
 class VMFComparator {
     private $ignoreOptions;
     private $parser;
 
-    public function __construct() {
-        $this->parser = new VMFParser();
+    public function __construct(VMFParser $parser) {
+        $this->parser = $parser;
     }
 
-    public function compareVMF($vmf1, $vmf2, $ignoreOptions) {
+    public function compareVMF($vmf1Path, $vmf2Path, $ignoreOptions = []) {
         $this->ignoreOptions = $ignoreOptions;
 
-        if (!isset($vmf1['tree']) || !isset($vmf2['tree']) || !is_array($vmf1['tree']) || !is_array($vmf2['tree'])) {
-            throw new Exception("Invalid VMF structure");
+        try {
+            $vmf1 = $this->parser->parseVMF($vmf1Path);
+            $vmf2 = $this->parser->parseVMF($vmf2Path);
+        } catch (VMFParserException $e) {
+            throw new VMFComparatorException("Error parsing VMF files: " . $e->getMessage());
         }
 
         $differences = [
             'removed' => [],
             'added' => [],
             'changed' => [],
-            'vertex_changed' => [],
-            'comments' => []
+            'vertex_changed' => []
         ];
         $stats = $this->initializeStats();
 
-        $this->gatherStats($vmf1['tree'], $stats, 'vmf1');
-        $this->gatherStats($vmf2['tree'], $stats, 'vmf2');
+        $this->gatherStats($vmf1, $stats, 'vmf1');
+        $this->gatherStats($vmf2, $stats, 'vmf2');
 
-        $this->compareElements($vmf1['tree'], $vmf2['tree'], '', $differences, $stats);
-
-        if ($stats['vertex_changes'] > 0) {
-            $stats['average_vertex_deviation'] = $stats['total_vertex_deviation'] / $stats['vertex_changes'];
-        }
-
-        // Compare additional sections
-        $additionalSections = [
-            'palette_plus' => 'comparePalettePlus',
-            'colorcorrection_plus' => 'compareColorCorrectionPlus',
-            'light_plus' => 'compareLightPlus',
-            'bgimages_plus' => 'compareBgImagesPlus',
-            'cameras' => 'compareCameras',
-            'cordons' => 'compareCordons'
-        ];
-
-        foreach ($additionalSections as $section => $compareMethod) {
-            $stats[$section . '_differences'] = $this->$compareMethod(
-                $vmf1['tree'][$section] ?? [],
-                $vmf2['tree'][$section] ?? []
-            );
-        }
-
-        // Compare comments if they are preserved
-        if (isset($vmf1['comments']) && isset($vmf2['comments'])) {
-            $differences['comments'] = $this->compareComments($vmf1['comments'], $vmf2['comments']);
-        }
-
-        return ['differences' => $differences, 'stats' => $stats];
-    }
-
-    public function compareVMFStreaming($filePath1, $filePath2, $ignoreOptions) {
-        $this->ignoreOptions = $ignoreOptions;
-
-        $stream1 = $this->parser->parseVMF($filePath1);
-        $stream2 = $this->parser->parseVMF($filePath2);
-
-        $differences = [
-            'removed' => [],
-            'added' => [],
-            'changed' => [],
-            'vertex_changed' => [],
-            'comments' => []
-        ];
-        $stats = $this->initializeStats();
-
-        while ($stream1->valid() && $stream2->valid()) {
-            $section1 = $stream1->current();
-            $section2 = $stream2->current();
-
-            if ($section1['name'] === $section2['name']) {
-                $this->compareStreamingSections($section1, $section2, $differences, $stats);
-                $stream1->next();
-                $stream2->next();
-            } elseif ($section1['name'] < $section2['name']) {
-                $differences['removed'][] = $section1;
-                $stream1->next();
-            } else {
-                $differences['added'][] = $section2;
-                $stream2->next();
-            }
-        }
-
-        // Handle remaining sections in either stream
-        while ($stream1->valid()) {
-            $differences['removed'][] = $stream1->current();
-            $stream1->next();
-        }
-
-        while ($stream2->valid()) {
-            $differences['added'][] = $stream2->current();
-            $stream2->next();
-        }
+        $this->compareElements($vmf1, $vmf2, '', $differences, $stats);
 
         if ($stats['vertex_changes'] > 0) {
             $stats['average_vertex_deviation'] = $stats['total_vertex_deviation'] / $stats['vertex_changes'];
         }
 
         return ['differences' => $differences, 'stats' => $stats];
-    }
-
-    private function compareStreamingSections($section1, $section2, &$differences, &$stats) {
-        $path = $section1['name'];
-        if ($this->shouldIgnore($path)) {
-            return;
-        }
-
-        $this->compareElements($section1['content'], $section2['content'], $path, $differences, $stats);
-
-        // Update stats for the current section
-        $this->gatherStatsForSection($section1['content'], $stats, 'vmf1');
-        $this->gatherStatsForSection($section2['content'], $stats, 'vmf2');
-    }
-
-    private function gatherStatsForSection($section, &$stats, $key) {
-        $stats['brush_counts'][$key] += $this->countBrushes($section);
-        $stats['displacement_counts'][$key] += $this->countDisplacements($section);
-        $stats['vertex_counts'][$key] += $this->countVertices($section);
-        $this->countTextures($section, $stats['texture_counts'][$key]);
-        $this->countSmoothingGroups($section, $stats['smoothing_group_counts'][$key]);
-        $stats['connections_counts'][$key] += $this->countConnections($section);
-        $this->countEntities($section, $stats['entity_counts'][$key]);
-        $stats['func_detail_counts'][$key] += $this->countFuncDetail($section);
-        $stats['areaportal_counts'][$key] += $this->countAreaportals($section);
-        $stats['occluder_counts'][$key] += $this->countOccluders($section);
-        $stats['hint_brush_counts'][$key] += $this->countHintBrushes($section);
-        $stats['ladder_counts'][$key] += $this->countLadders($section);
-        $stats['water_volume_counts'][$key] += $this->countWaterVolumes($section);
-        $this->updateSkyboxInfo($section, $stats['skybox_info'][$key]);
-        $stats['spawn_point_counts'][$key] += $this->countSpawnPoints($section);
-        $stats['buy_zone_counts'][$key] += $this->countBuyZones($section);
-        $stats['bombsite_counts'][$key] += $this->countBombsites($section);
-    }
-
-    private function compareComments($comments1, $comments2) {
-        $commentDiffs = [
-            'removed' => [],
-            'added' => [],
-            'changed' => []
-        ];
-
-        $allCommentKeys = array_unique(array_merge(array_keys($comments1), array_keys($comments2)));
-
-        foreach ($allCommentKeys as $key) {
-            if (!isset($comments2[$key])) {
-                $commentDiffs['removed'][] = $comments1[$key];
-            } elseif (!isset($comments1[$key])) {
-                $commentDiffs['added'][] = $comments2[$key];
-            } elseif ($comments1[$key] !== $comments2[$key]) {
-                $commentDiffs['changed'][] = [
-                    'old' => $comments1[$key],
-                    'new' => $comments2[$key]
-                ];
-            }
-        }
-
-        return $commentDiffs;
-    }
-
-    private function updateSkyboxInfo($section, &$skyboxInfo) {
-        if (isset($section['skyname'])) {
-            $skyboxInfo['skyname'] = $section['skyname'];
-        }
-        if (isset($section['entity'])) {
-            $entities = is_array($section['entity']) ? $section['entity'] : [$section['entity']];
-            foreach ($entities as $entity) {
-                if (isset($entity['classname']) && $entity['classname'] === 'sky_camera') {
-                    $skyboxInfo['sky_camera'] = $entity;
-                    break;
-                }
-            }
-        }
-    }
-
-    private function initializeStats() {
-        return [
-            'total_differences' => 0,
-            'vertex_changes' => 0,
-            'total_vertex_deviation' => 0,
-            'max_vertex_deviation' => 0,
-            'entity_counts' => ['vmf1' => [], 'vmf2' => []],
-            'brush_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'displacement_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'visgroup_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'camera_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'cordon_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'texture_counts' => ['vmf1' => [], 'vmf2' => []],
-            'smoothing_group_counts' => ['vmf1' => [], 'vmf2' => []],
-            'connections_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'group_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'func_detail_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'areaportal_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'occluder_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'hint_brush_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'ladder_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'water_volume_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'skybox_info' => ['vmf1' => [], 'vmf2' => []],
-            'spawn_point_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'buy_zone_counts' => ['vmf1' => 0, 'vmf2' => 0],
-            'bombsite_counts' => ['vmf1' => 0, 'vmf2' => 0],
-        ];
-    }
-
-    private function gatherStats($vmf, &$stats, $key) {
-        $stats['brush_counts'][$key] = $this->countBrushes($vmf);
-        $stats['displacement_counts'][$key] = $this->countDisplacements($vmf);
-        $stats['visgroup_counts'][$key] = $this->countVisgroups($vmf);
-        $stats['camera_counts'][$key] = $this->countCameras($vmf);
-        $stats['cordon_counts'][$key] = $this->countCordons($vmf);
-        $stats['texture_counts'][$key] = $this->countTextures($vmf);
-        $stats['vertex_counts'][$key] = $this->countVertices($vmf);
-        $stats['smoothing_group_counts'][$key] = $this->countSmoothingGroups($vmf);
-        $stats['connections_counts'][$key] = $this->countConnections($vmf);
-        $stats['entity_counts'][$key] = $this->countEntities($vmf);
-        $stats['group_counts'][$key] = $this->countGroups($vmf);
-        $stats['func_detail_counts'][$key] = $this->countFuncDetail($vmf);
-        $stats['areaportal_counts'][$key] = $this->countAreaportals($vmf);
-        $stats['occluder_counts'][$key] = $this->countOccluders($vmf);
-        $stats['hint_brush_counts'][$key] = $this->countHintBrushes($vmf);
-        $stats['ladder_counts'][$key] = $this->countLadders($vmf);
-        $stats['water_volume_counts'][$key] = $this->countWaterVolumes($vmf);
-        $stats['skybox_info'][$key] = $this->getSkyboxInfo($vmf);
-        $stats['spawn_point_counts'][$key] = $this->countSpawnPoints($vmf);
-        $stats['buy_zone_counts'][$key] = $this->countBuyZones($vmf);
-        $stats['bombsite_counts'][$key] = $this->countBombsites($vmf);
     }
 
     private function compareElements($tree1, $tree2, $path, &$differences, &$stats) {
@@ -258,53 +63,10 @@ class VMFComparator {
                 $elem1 = $tree1[$key];
                 $elem2 = $tree2[$key];
                 if (is_array($elem1) && is_array($elem2)) {
-                    $this->compareElements($elem1, $elem2, $newPath, $differences, $stats);
-                } elseif ($elem1 !== $elem2) {
-                    $differences['changed'][] = [
-                        'path' => $newPath,
-                        'old_value' => $elem1,
-                        'new_value' => $elem2
-                    ];
-                    $stats['total_differences']++;
-                }
-            }
-        }
-    }
-
-    private function compareElementProperties($elem1, $elem2, $path, $id, &$differences, &$stats) {
-        $allKeys = array_unique(array_merge(array_keys($elem1), array_keys($elem2)));
-        
-        foreach ($allKeys as $key) {
-            if ($key === '__id') continue; // Skip the ID field in comparison
-            
-            $newPath = "$path.$key";
-            if ($this->shouldIgnore($newPath)) {
-                continue;
-            }
-            
-            if (!array_key_exists($key, $elem2)) {
-                $differences['removed'][] = [
-                    'id' => $id,
-                    'path' => $newPath,
-                    'value' => $elem1[$key]
-                ];
-                $stats['total_differences']++;
-            } elseif (!array_key_exists($key, $elem1)) {
-                $differences['added'][] = [
-                    'id' => $id,
-                    'path' => $newPath,
-                    'value' => $elem2[$key]
-                ];
-                $stats['total_differences']++;
-            } else {
-                $value1 = $elem1[$key];
-                $value2 = $elem2[$key];
-                if (is_array($value1) && is_array($value2)) {
                     if ($key === 'vertices_plus') {
-                        $vertexDiff = $this->compareVertices($value1, $value2);
+                        $vertexDiff = $this->compareVertices($elem1, $elem2);
                         if ($vertexDiff) {
                             $differences['vertex_changed'][] = [
-                                'id' => $id,
                                 'path' => $newPath,
                                 'difference' => $vertexDiff
                             ];
@@ -312,27 +74,18 @@ class VMFComparator {
                             $stats['total_vertex_deviation'] += $vertexDiff['total_deviation'];
                             $stats['max_vertex_deviation'] = max($stats['max_vertex_deviation'], $vertexDiff['max_deviation']);
                         }
-                    } elseif (isset($value1[0]) && isset($value2[0])) {
-                        // Compare arrays of values
-                        $arrayDiff = array_diff($value1, $value2);
-                        if (!empty($arrayDiff)) {
-                            $differences['changed'][] = [
-                                'id' => $id,
-                                'path' => $newPath,
-                                'old_value' => $value1,
-                                'new_value' => $value2
-                            ];
-                            $stats['total_differences']++;
-                        }
+                    } elseif ($key === 'entities') {
+                        $this->compareEntities($elem1, $elem2, $newPath, $differences, $stats);
+                    } elseif (in_array($key, ['custom_visgroups', 'instance_parameters', 'palette_plus', 'colorcorrection_plus', 'light_plus', 'bgimages_plus'])) {
+                        $this->compareHammerPlusElements($elem1, $elem2, $newPath, $differences, $stats);
                     } else {
-                        $this->compareElements($value1, $value2, $newPath, $differences, $stats);
+                        $this->compareElements($elem1, $elem2, $newPath, $differences, $stats);
                     }
-                } elseif ($value1 !== $value2) {
+                } elseif ($elem1 !== $elem2) {
                     $differences['changed'][] = [
-                        'id' => $id,
                         'path' => $newPath,
-                        'old_value' => $value1,
-                        'new_value' => $value2
+                        'old_value' => $elem1,
+                        'new_value' => $elem2
                     ];
                     $stats['total_differences']++;
                 }
@@ -391,6 +144,69 @@ class VMFComparator {
         return null;
     }
 
+    private function compareEntities($entities1, $entities2, $path, &$differences, &$stats) {
+        $entityMap1 = $this->mapEntities($entities1);
+        $entityMap2 = $this->mapEntities($entities2);
+
+        $allIds = array_unique(array_merge(array_keys($entityMap1), array_keys($entityMap2)));
+
+        foreach ($allIds as $id) {
+            $newPath = "$path.$id";
+            if (!isset($entityMap2[$id])) {
+                $differences['removed'][] = [
+                    'path' => $newPath,
+                    'value' => $entityMap1[$id]
+                ];
+                $stats['total_differences']++;
+            } elseif (!isset($entityMap1[$id])) {
+                $differences['added'][] = [
+                    'path' => $newPath,
+                    'value' => $entityMap2[$id]
+                ];
+                $stats['total_differences']++;
+            } else {
+                $this->compareElements($entityMap1[$id], $entityMap2[$id], $newPath, $differences, $stats);
+            }
+        }
+    }
+
+    private function compareHammerPlusElements($elem1, $elem2, $path, &$differences, &$stats) {
+        $allKeys = array_unique(array_merge(array_keys($elem1), array_keys($elem2)));
+        
+        foreach ($allKeys as $key) {
+            $newPath = "$path.$key";
+            if (!isset($elem2[$key])) {
+                $differences['removed'][] = [
+                    'path' => $newPath,
+                    'value' => $elem1[$key]
+                ];
+                $stats['total_differences']++;
+            } elseif (!isset($elem1[$key])) {
+                $differences['added'][] = [
+                    'path' => $newPath,
+                    'value' => $elem2[$key]
+                ];
+                $stats['total_differences']++;
+            } elseif ($elem1[$key] !== $elem2[$key]) {
+                $differences['changed'][] = [
+                    'path' => $newPath,
+                    'old_value' => $elem1[$key],
+                    'new_value' => $elem2[$key]
+                ];
+                $stats['total_differences']++;
+            }
+        }
+    }
+
+    private function mapEntities($entities) {
+        $map = [];
+        foreach ($entities as $entity) {
+            $id = isset($entity['id']) ? $entity['id'] : (isset($entity['targetname']) ? $entity['targetname'] : uniqid('entity_'));
+            $map[$id] = $entity;
+        }
+        return $map;
+    }
+
     private function shouldIgnore($path) {
         foreach ($this->ignoreOptions as $option) {
             if (fnmatch($option, $path)) {
@@ -400,213 +216,168 @@ class VMFComparator {
         return false;
     }
 
+    private function initializeStats() {
+        return [
+            'total_differences' => 0,
+            'vertex_changes' => 0,
+            'total_vertex_deviation' => 0,
+            'max_vertex_deviation' => 0,
+            'brush_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'entity_counts' => ['vmf1' => [], 'vmf2' => []],
+            'texture_counts' => ['vmf1' => [], 'vmf2' => []],
+            'displacement_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'visgroup_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'camera_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'cordon_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'vertex_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'smoothing_group_counts' => ['vmf1' => [], 'vmf2' => []],
+            'connections_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'group_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'func_detail_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'areaportal_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'occluder_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'hint_brush_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'ladder_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'water_volume_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'skybox_info' => ['vmf1' => [], 'vmf2' => []],
+            'spawn_point_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'buy_zone_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'bombsite_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'hostage_rescue_zone_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'hostage_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'weapon_spawn_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'light_entity_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'trigger_entity_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'map_bounds' => ['vmf1' => [], 'vmf2' => []],
+            'instance_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'custom_visgroup_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'palette_plus_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'colorcorrection_plus_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'light_plus_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'bgimages_plus_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'instance_parameter_counts' => ['vmf1' => 0, 'vmf2' => 0],
+            'total_entity_count' => ['vmf1' => 0, 'vmf2' => 0],
+            'total_brush_count' => ['vmf1' => 0, 'vmf2' => 0],
+            'total_side_count' => ['vmf1' => 0, 'vmf2' => 0],
+            'total_texture_count' => ['vmf1' => 0, 'vmf2' => 0],
+            'unique_texture_count' => ['vmf1' => 0, 'vmf2' => 0],
+            'cordons_active' => ['vmf1' => false, 'vmf2' => false],
+            'version_info' => ['vmf1' => [], 'vmf2' => []],
+        ];
+    }
+
+    private function gatherStats($vmf, &$stats, $key) {
+        $stats['brush_counts'][$key] = $this->countBrushes($vmf);
+        $stats['entity_counts'][$key] = $this->countEntities($vmf);
+        $stats['texture_counts'][$key] = $this->countTextures($vmf);
+        $stats['displacement_counts'][$key] = $this->countDisplacements($vmf);
+        $stats['visgroup_counts'][$key] = $this->countVisgroups($vmf);
+        $stats['camera_counts'][$key] = $this->countCameras($vmf);
+        $stats['cordon_counts'][$key] = $this->countCordons($vmf);
+        $stats['vertex_counts'][$key] = $this->countVertices($vmf);
+        $stats['smoothing_group_counts'][$key] = $this->countSmoothingGroups($vmf);
+        $stats['connections_counts'][$key] = $this->countConnections($vmf);
+        $stats['group_counts'][$key] = $this->countGroups($vmf);
+        $stats['func_detail_counts'][$key] = $this->countFuncDetail($vmf);
+        $stats['areaportal_counts'][$key] = $this->countAreaportals($vmf);
+        $stats['occluder_counts'][$key] = $this->countOccluders($vmf);
+        $stats['hint_brush_counts'][$key] = $this->countHintBrushes($vmf);
+        $stats['ladder_counts'][$key] = $this->countLadders($vmf);
+        $stats['water_volume_counts'][$key] = $this->countWaterVolumes($vmf);
+        $stats['skybox_info'][$key] = $this->getSkyboxInfo($vmf);
+        $stats['spawn_point_counts'][$key] = $this->countSpawnPoints($vmf);
+        $stats['buy_zone_counts'][$key] = $this->countBuyZones($vmf);
+        $stats['bombsite_counts'][$key] = $this->countBombsites($vmf);
+        $stats['hostage_rescue_zone_counts'][$key] = $this->countHostageRescueZones($vmf);
+        $stats['hostage_counts'][$key] = $this->countHostages($vmf);
+        $stats['weapon_spawn_counts'][$key] = $this->countWeaponSpawnPoints($vmf);
+        $stats['light_entity_counts'][$key] = $this->countLightEntities($vmf);
+        $stats['trigger_entity_counts'][$key] = $this->countTriggerEntities($vmf);
+        $stats['map_bounds'][$key] = $this->getMapBounds($vmf);
+        $stats['instance_counts'][$key] = $this->countInstances($vmf);
+        $stats['custom_visgroup_counts'][$key] = $this->countCustomVisgroups($vmf);
+        
+        // New Hammer++ specific stats
+        $stats['palette_plus_counts'][$key] = $this->countPalettePlus($vmf);
+        $stats['colorcorrection_plus_counts'][$key] = $this->countColorCorrectionPlus($vmf);
+        $stats['light_plus_counts'][$key] = $this->countLightPlus($vmf);
+        $stats['bgimages_plus_counts'][$key] = $this->countBgImagesPlus($vmf);
+        $stats['instance_parameter_counts'][$key] = $this->countInstanceParameters($vmf);
+        
+        // Additional stats
+        $stats['total_entity_count'][$key] = count($stats['entity_counts'][$key]);
+        $stats['total_brush_count'][$key] = $stats['brush_counts'][$key];
+        $stats['total_side_count'][$key] = $this->countSides($vmf);
+        $stats['total_texture_count'][$key] = array_sum($stats['texture_counts'][$key]);
+        $stats['unique_texture_count'][$key] = count($stats['texture_counts'][$key]);
+        $stats['cordons_active'][$key] = $this->areCordonsActive($vmf);
+        $stats['version_info'][$key] = $this->getVersionInfo($vmf);
+    }
     
-    private function comparePalettePlus($palette1, $palette2) {
-        $differences = [];
-        $allColors = array_unique(array_merge(array_keys($palette1), array_keys($palette2)));
-        
-        foreach ($allColors as $color) {
-            if (!isset($palette2[$color])) {
-                $differences[] = ["removed" => [$color => $palette1[$color]]];
-            } elseif (!isset($palette1[$color])) {
-                $differences[] = ["added" => [$color => $palette2[$color]]];
-            } elseif ($palette1[$color] !== $palette2[$color]) {
-                if (is_array($palette1[$color]) && is_array($palette2[$color]) && isset($palette1[$color][0]) && isset($palette2[$color][0])) {
-                    $arrayDiff = array_diff($palette1[$color], $palette2[$color]);
-                    if (!empty($arrayDiff)) {
-                        $differences[] = ["changed" => [$color => ["old" => $palette1[$color], "new" => $palette2[$color]]]];
-                    }
-                } else {
-                    $differences[] = ["changed" => [$color => ["old" => $palette1[$color], "new" => $palette2[$color]]]];
+    // Add these new methods to the VMFComparator class:
+    
+    private function countSides($vmf) {
+        $count = 0;
+        if (isset($vmf['world']['solid'])) {
+            $count += $this->countSidesInBrushes($vmf['world']);
+        }
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
+                $count += $this->countSidesInBrushes($entity);
+            }
+        }
+        return $count;
+    }
+    
+    private function countSidesInBrushes($brushContainer) {
+        $count = 0;
+        if (isset($brushContainer['solid'])) {
+            $solids = is_array($brushContainer['solid']) ? $brushContainer['solid'] : [$brushContainer['solid']];
+            foreach ($solids as $solid) {
+                if (isset($solid['side'])) {
+                    $count += is_array($solid['side']) ? count($solid['side']) : 1;
                 }
             }
         }
-        
-        return $differences;
+        return $count;
+    }
+    
+    private function areCordonsActive($vmf) {
+        return isset($vmf['cordons']['active']) && $vmf['cordons']['active'] == '1';
+    }
+    
+    private function getVersionInfo($vmf) {
+        return isset($vmf['versioninfo']) ? $vmf['versioninfo'] : [];
+    }
+    
+    private function countInstanceParameters($vmf) {
+        return isset($vmf['instance_parameters']) ? count($vmf['instance_parameters']) : 0;
     }
 
-    private function compareColorCorrectionPlus($cc1, $cc2) {
-        $differences = [];
-        $allKeys = array_unique(array_merge(array_keys($cc1), array_keys($cc2)));
-        
-        foreach ($allKeys as $key) {
-            if (!isset($cc2[$key])) {
-                $differences[] = ["removed" => [$key => $cc1[$key]]];
-            } elseif (!isset($cc1[$key])) {
-                $differences[] = ["added" => [$key => $cc2[$key]]];
-            } elseif ($cc1[$key] !== $cc2[$key]) {
-                if (is_array($cc1[$key]) && is_array($cc2[$key])) {
-                    $arrayDiff = array_diff($cc1[$key], $cc2[$key]);
-                    if (!empty($arrayDiff)) {
-                        $differences[] = ["changed" => [$key => ["old" => $cc1[$key], "new" => $cc2[$key]]]];
-                    }
-                } else {
-                    $differences[] = ["changed" => [$key => ["old" => $cc1[$key], "new" => $cc2[$key]]]];
-                }
-            }
-        }
-        
-        return $differences;
+    private function countPalettePlus($vmf) {
+        return isset($vmf['palette_plus']) ? count($vmf['palette_plus']) : 0;
     }
 
-    private function compareLightPlus($light1, $light2) {
-        $differences = [];
-        $allKeys = array_unique(array_merge(array_keys($light1), array_keys($light2)));
-        
-        foreach ($allKeys as $key) {
-            if (!isset($light2[$key])) {
-                $differences[] = ["removed" => [$key => $light1[$key]]];
-            } elseif (!isset($light1[$key])) {
-                $differences[] = ["added" => [$key => $light2[$key]]];
-            } elseif ($light1[$key] !== $light2[$key]) {
-                if (is_array($light1[$key]) && is_array($light2[$key])) {
-                    $arrayDiff = array_diff($light1[$key], $light2[$key]);
-                    if (!empty($arrayDiff)) {
-                        $differences[] = ["changed" => [$key => ["old" => $light1[$key], "new" => $light2[$key]]]];
-                    }
-                } else {
-                    $differences[] = ["changed" => [$key => ["old" => $light1[$key], "new" => $light2[$key]]]];
-                }
-            }
-        }
-        
-        return $differences;
+    private function countColorCorrectionPlus($vmf) {
+        return isset($vmf['colorcorrection_plus']) ? count($vmf['colorcorrection_plus']) : 0;
     }
 
-    private function compareBgImagesPlus($bg1, $bg2) {
-        $differences = [];
-        $allKeys = array_unique(array_merge(array_keys($bg1), array_keys($bg2)));
-        
-        foreach ($allKeys as $key) {
-            if (!isset($bg2[$key])) {
-                $differences[] = ["removed" => [$key => $bg1[$key]]];
-            } elseif (!isset($bg1[$key])) {
-                $differences[] = ["added" => [$key => $bg2[$key]]];
-            } elseif ($bg1[$key] !== $bg2[$key]) {
-                if (is_array($bg1[$key]) && is_array($bg2[$key])) {
-                    $arrayDiff = array_diff($bg1[$key], $bg2[$key]);
-                    if (!empty($arrayDiff)) {
-                        $differences[] = ["changed" => [$key => ["old" => $bg1[$key], "new" => $bg2[$key]]]];
-                    }
-                } else {
-                    $differences[] = ["changed" => [$key => ["old" => $bg1[$key], "new" => $bg2[$key]]]];
-                }
-            }
-        }
-        
-        return $differences;
+    private function countLightPlus($vmf) {
+        return isset($vmf['light_plus']) ? count($vmf['light_plus']) : 0;
     }
 
-    private function compareCameras($cameras1, $cameras2) {
-        $differences = [];
-        $allKeys = array_unique(array_merge(array_keys($cameras1), array_keys($cameras2)));
-        
-        foreach ($allKeys as $key) {
-            if ($key === 'cameras') {
-                if (isset($cameras1['cameras']) && isset($cameras2['cameras']) && 
-                    is_array($cameras1['cameras']) && is_array($cameras2['cameras'])) {
-                    $cameraDiffs = $this->compareCameraList($cameras1['cameras'], $cameras2['cameras']);
-                    if (!empty($cameraDiffs)) {
-                        $differences['cameras'] = $cameraDiffs;
-                    }
-                }
-            } elseif (!isset($cameras2[$key])) {
-                $differences[] = ["removed" => [$key => $cameras1[$key]]];
-            } elseif (!isset($cameras1[$key])) {
-                $differences[] = ["added" => [$key => $cameras2[$key]]];
-            } elseif ($cameras1[$key] !== $cameras2[$key]) {
-                if (is_array($cameras1[$key]) && is_array($cameras2[$key])) {
-                    $arrayDiff = array_diff($cameras1[$key], $cameras2[$key]);
-                    if (!empty($arrayDiff)) {
-                        $differences[] = ["changed" => [$key => ["old" => $cameras1[$key], "new" => $cameras2[$key]]]];
-                    }
-                } else {
-                    $differences[] = ["changed" => [$key => ["old" => $cameras1[$key], "new" => $cameras2[$key]]]];
-                }
-            }
-        }
-        
-        return $differences;
+    private function countBgImagesPlus($vmf) {
+        return isset($vmf['bgimages_plus']) ? count($vmf['bgimages_plus']) : 0;
     }
 
-    private function compareCameraList($list1, $list2) {
-        $differences = [];
-        $count = max(count($list1), count($list2));
-        
-        for ($i = 0; $i < $count; $i++) {
-            if (!isset($list2[$i])) {
-                $differences[] = ["removed" => $list1[$i]];
-            } elseif (!isset($list1[$i])) {
-                $differences[] = ["added" => $list2[$i]];
-            } else {
-                $cameraDiff = $this->compareCamera($list1[$i], $list2[$i]);
-                if (!empty($cameraDiff)) {
-                    $differences[] = ["changed" => $cameraDiff];
-                }
-            }
-        }
-        
-        return $differences;
-    }
-
-    private function compareCamera($camera1, $camera2) {
-        $differences = [];
-        $allKeys = array_unique(array_merge(array_keys($camera1), array_keys($camera2)));
-        
-        foreach ($allKeys as $key) {
-            if (!isset($camera2[$key])) {
-                $differences[$key] = ["removed" => $camera1[$key]];
-            } elseif (!isset($camera1[$key])) {
-                $differences[$key] = ["added" => $camera2[$key]];
-            } elseif ($camera1[$key] !== $camera2[$key]) {
-                if (is_array($camera1[$key]) && is_array($camera2[$key])) {
-                    $arrayDiff = array_diff($camera1[$key], $camera2[$key]);
-                    if (!empty($arrayDiff)) {
-                        $differences[$key] = ["old" => $camera1[$key], "new" => $camera2[$key]];
-                    }
-                } else {
-                    $differences[$key] = ["old" => $camera1[$key], "new" => $camera2[$key]];
-                }
-            }
-        }
-        
-        return $differences;
-    }
-
-    private function compareCordons($cordons1, $cordons2) {
-        $differences = [];
-        $allKeys = array_unique(array_merge(array_keys($cordons1), array_keys($cordons2)));
-        
-        foreach ($allKeys as $key) {
-            if (!isset($cordons2[$key])) {
-                $differences[] = ["removed" => [$key => $cordons1[$key]]];
-            } elseif (!isset($cordons1[$key])) {
-                $differences[] = ["added" => [$key => $cordons2[$key]]];
-            } elseif ($cordons1[$key] !== $cordons2[$key]) {
-                if (is_array($cordons1[$key]) && is_array($cordons2[$key])) {
-                    $arrayDiff = array_diff($cordons1[$key], $cordons2[$key]);
-                    if (!empty($arrayDiff)) {
-                        $differences[] = ["changed" => [$key => ["old" => $cordons1[$key], "new" => $cordons2[$key]]]];
-                    }
-                } else {
-                    $differences[] = ["changed" => [$key => ["old" => $cordons1[$key], "new" => $cordons2[$key]]]];
-                }
-            }
-        }
-        
-        return $differences;
-    }
-
-    // Helper methods for counting various elements
     private function countBrushes($vmf) {
         $count = 0;
         if (isset($vmf['world']['solid'])) {
             $count += is_array($vmf['world']['solid']) ? 
                 (isset($vmf['world']['solid'][0]) ? count($vmf['world']['solid']) : 1) : 1;
         }
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
                 if (isset($entity['solid'])) {
                     $count += is_array($entity['solid']) ? 
                         (isset($entity['solid'][0]) ? count($entity['solid']) : 1) : 1;
@@ -616,83 +387,16 @@ class VMFComparator {
         return $count;
     }
 
-    private function countDisplacements($vmf) {
-        $count = 0;
-        if (isset($vmf['world'])) {
-            $count += $this->countDisplacementsInBrushes($vmf['world']);
-        }
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
-                $count += $this->countDisplacementsInBrushes($entity);
-            }
-        }
-        return $count;
-    }
-
-    private function countDisplacementsInBrushes($brushContainer) {
-        $count = 0;
-        if (isset($brushContainer['solid'])) {
-            $solids = is_array($brushContainer['solid']) ? $brushContainer['solid'] : [$brushContainer['solid']];
-            foreach ($solids as $solid) {
-                if (isset($solid['side'])) {
-                    $sides = is_array($solid['side']) ? $solid['side'] : [$solid['side']];
-                    foreach ($sides as $side) {
-                        if (isset($side['dispinfo'])) {
-                            $count++;
-                        }
-                    }
+    private function countEntities($vmf) {
+        $entities = [];
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
+                if (isset($entity['classname'])) {
+                    $entities[$entity['classname']] = ($entities[$entity['classname']] ?? 0) + 1;
                 }
             }
         }
-        return $count;
-    }
-
-    private function countVertices($vmf) {
-        $count = 0;
-        if (isset($vmf['world'])) {
-            $count += $this->countVerticesInBrushes($vmf['world']);
-        }
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
-                $count += $this->countVerticesInBrushes($entity);
-            }
-        }
-        return $count;
-    }
-
-    private function countVerticesInBrushes($brushContainer) {
-        $count = 0;
-        if (isset($brushContainer['solid'])) {
-            $solids = is_array($brushContainer['solid']) ? $brushContainer['solid'] : [$brushContainer['solid']];
-            foreach ($solids as $solid) {
-                if (isset($solid['vertices_plus'])) {
-                    foreach ($solid['vertices_plus'] as $vertexSet) {
-                        $count += count($vertexSet);
-                    }
-                }
-            }
-        }
-        return $count;
-    }
-
-    private function countVisgroups($vmf) {
-        if (!isset($vmf['visgroups']['visgroup'])) return 0;
-        $visgroups = $vmf['visgroups']['visgroup'];
-        return is_array($visgroups) ? (isset($visgroups[0]) ? count($visgroups) : 1) : 1;
-    }
-
-    private function countCameras($vmf) {
-        if (!isset($vmf['cameras']['camera'])) return 0;
-        $cameras = $vmf['cameras']['camera'];
-        return is_array($cameras) ? (isset($cameras[0]) ? count($cameras) : 1) : 1;
-    }
-
-    private function countCordons($vmf) {
-        if (!isset($vmf['cordons']['cordon'])) return 0;
-        $cordons = $vmf['cordons']['cordon'];
-        return is_array($cordons) ? (isset($cordons[0]) ? count($cordons) : 1) : 1;
+        return $entities;
     }
 
     private function countTextures($vmf) {
@@ -700,9 +404,8 @@ class VMFComparator {
         if (isset($vmf['world'])) {
             $this->countTexturesInBrushes($vmf['world'], $textures);
         }
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
                 $this->countTexturesInBrushes($entity, $textures);
             }
         }
@@ -725,20 +428,90 @@ class VMFComparator {
         }
     }
 
+    private function countDisplacements($vmf) {
+        $count = 0;
+        if (isset($vmf['world'])) {
+            $count += $this->countDisplacementsInBrushes($vmf['world']);
+        }
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
+                $count += $this->countDisplacementsInBrushes($entity);
+            }
+        }
+        return $count;
+    }
+    
+    private function countDisplacementsInBrushes($brushContainer) {
+        $count = 0;
+        if (isset($brushContainer['solid'])) {
+            $solids = is_array($brushContainer['solid']) ? $brushContainer['solid'] : [$brushContainer['solid']];
+            foreach ($solids as $solid) {
+                if (isset($solid['side'])) {
+                    $sides = is_array($solid['side']) ? $solid['side'] : [$solid['side']];
+                    foreach ($sides as $side) {
+                        if (isset($side['dispinfo'])) {
+                            $count++;
+                        }
+                    }
+                }
+            }
+        }
+        return $count;
+    }
+    
+    private function countVisgroups($vmf) {
+        return isset($vmf['visgroups']) ? count($vmf['visgroups']) : 0;
+    }
+    
+    private function countCameras($vmf) {
+        return isset($vmf['cameras']) ? count($vmf['cameras']) : 0;
+    }
+    
+    private function countCordons($vmf) {
+        return isset($vmf['cordon']) ? 1 : 0;
+    }
+    
+    private function countVertices($vmf) {
+        $count = 0;
+        if (isset($vmf['world'])) {
+            $count += $this->countVerticesInBrushes($vmf['world']);
+        }
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
+                $count += $this->countVerticesInBrushes($entity);
+            }
+        }
+        return $count;
+    }
+    
+    private function countVerticesInBrushes($brushContainer) {
+        $count = 0;
+        if (isset($brushContainer['solid'])) {
+            $solids = is_array($brushContainer['solid']) ? $brushContainer['solid'] : [$brushContainer['solid']];
+            foreach ($solids as $solid) {
+                if (isset($solid['vertices_plus'])) {
+                    foreach ($solid['vertices_plus'] as $vertexSet) {
+                        $count += count($vertexSet);
+                    }
+                }
+            }
+        }
+        return $count;
+    }
+    
     private function countSmoothingGroups($vmf) {
         $groups = [];
         if (isset($vmf['world'])) {
             $this->countSmoothingGroupsInBrushes($vmf['world'], $groups);
         }
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
                 $this->countSmoothingGroupsInBrushes($entity, $groups);
             }
         }
         return $groups;
     }
-
+    
     private function countSmoothingGroupsInBrushes($brushContainer, &$groups) {
         if (isset($brushContainer['solid'])) {
             $solids = is_array($brushContainer['solid']) ? $brushContainer['solid'] : [$brushContainer['solid']];
@@ -754,12 +527,11 @@ class VMFComparator {
             }
         }
     }
-
+    
     private function countConnections($vmf) {
         $count = 0;
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
                 if (isset($entity['connections'])) {
                     $connections = $entity['connections'];
                     $count += is_array($connections) ? (isset($connections[0]) ? count($connections) : 1) : 1;
@@ -768,31 +540,15 @@ class VMFComparator {
         }
         return $count;
     }
-
-    private function countEntities($vmf) {
-        $entities = [];
-        if (isset($vmf['entity'])) {
-            $entityList = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entityList as $entity) {
-                if (isset($entity['classname'])) {
-                    $entities[$entity['classname']] = ($entities[$entity['classname']] ?? 0) + 1;
-                }
-            }
-        }
-        return $entities;
-    }
-
+    
     private function countGroups($vmf) {
-        if (!isset($vmf['group'])) return 0;
-        $groups = $vmf['group'];
-        return is_array($groups) ? (isset($groups[0]) ? count($groups) : 1) : 1;
+        return isset($vmf['group']) ? (is_array($vmf['group']) ? count($vmf['group']) : 1) : 0;
     }
-
+    
     private function countFuncDetail($vmf) {
         $count = 0;
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
                 if (isset($entity['classname']) && $entity['classname'] === 'func_detail') {
                     $count++;
                 }
@@ -800,12 +556,11 @@ class VMFComparator {
         }
         return $count;
     }
-
+    
     private function countAreaportals($vmf) {
         $count = 0;
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
                 if (isset($entity['classname']) && $entity['classname'] === 'func_areaportal') {
                     $count++;
                 }
@@ -813,12 +568,11 @@ class VMFComparator {
         }
         return $count;
     }
-
+    
     private function countOccluders($vmf) {
         $count = 0;
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
                 if (isset($entity['classname']) && $entity['classname'] === 'func_occluder') {
                     $count++;
                 }
@@ -826,21 +580,20 @@ class VMFComparator {
         }
         return $count;
     }
-
+    
     private function countHintBrushes($vmf) {
         $count = 0;
         if (isset($vmf['world'])) {
             $count += $this->countHintBrushesInBrushes($vmf['world']);
         }
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
                 $count += $this->countHintBrushesInBrushes($entity);
             }
         }
         return $count;
     }
-
+    
     private function countHintBrushesInBrushes($brushContainer) {
         $count = 0;
         if (isset($brushContainer['solid'])) {
@@ -859,12 +612,11 @@ class VMFComparator {
         }
         return $count;
     }
-
+    
     private function countLadders($vmf) {
         $count = 0;
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
                 if (isset($entity['classname']) && $entity['classname'] === 'func_ladder') {
                     $count++;
                 }
@@ -872,12 +624,11 @@ class VMFComparator {
         }
         return $count;
     }
-
+    
     private function countWaterVolumes($vmf) {
         $count = 0;
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
                 if (isset($entity['classname']) && in_array($entity['classname'], ['func_water', 'func_water_lod'])) {
                     $count++;
                 }
@@ -885,15 +636,14 @@ class VMFComparator {
         }
         return $count;
     }
-
+    
     private function getSkyboxInfo($vmf) {
         $skyboxInfo = [];
         if (isset($vmf['world']['skyname'])) {
             $skyboxInfo['skyname'] = $vmf['world']['skyname'];
         }
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
                 if (isset($entity['classname']) && $entity['classname'] === 'sky_camera') {
                     $skyboxInfo['sky_camera'] = $entity;
                     break;
@@ -902,12 +652,11 @@ class VMFComparator {
         }
         return $skyboxInfo;
     }
-
+    
     private function countSpawnPoints($vmf) {
         $count = 0;
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
                 if (isset($entity['classname']) && in_array($entity['classname'], ['info_player_terrorist', 'info_player_counterterrorist'])) {
                     $count++;
                 }
@@ -918,9 +667,8 @@ class VMFComparator {
 
     private function countBuyZones($vmf) {
         $count = 0;
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
                 if (isset($entity['classname']) && $entity['classname'] === 'func_buyzone') {
                     $count++;
                 }
@@ -928,12 +676,11 @@ class VMFComparator {
         }
         return $count;
     }
-
+    
     private function countBombsites($vmf) {
         $count = 0;
-        if (isset($vmf['entity'])) {
-            $entities = is_array($vmf['entity']) ? $vmf['entity'] : [$vmf['entity']];
-            foreach ($entities as $entity) {
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
                 if (isset($entity['classname']) && $entity['classname'] === 'func_bomb_target') {
                     $count++;
                 }
@@ -941,11 +688,267 @@ class VMFComparator {
         }
         return $count;
     }
+    
+    private function countHostageRescueZones($vmf) {
+        $count = 0;
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
+                if (isset($entity['classname']) && $entity['classname'] === 'func_hostage_rescue') {
+                    $count++;
+                }
+            }
+        }
+        return $count;
+    }
+    
+    private function countHostages($vmf) {
+        $count = 0;
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
+                if (isset($entity['classname']) && $entity['classname'] === 'hostage_entity') {
+                    $count++;
+                }
+            }
+        }
+        return $count;
+    }
+    
+    private function countWeaponSpawnPoints($vmf) {
+        $count = 0;
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
+                if (isset($entity['classname']) && strpos($entity['classname'], 'weapon_') === 0) {
+                    $count++;
+                }
+            }
+        }
+        return $count;
+    }
+    
+    private function countLightEntities($vmf) {
+        $count = 0;
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
+                if (isset($entity['classname']) && in_array($entity['classname'], ['light', 'light_spot', 'light_environment'])) {
+                    $count++;
+                }
+            }
+        }
+        return $count;
+    }
+    
+    private function countTriggerEntities($vmf) {
+        $count = 0;
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
+                if (isset($entity['classname']) && strpos($entity['classname'], 'trigger_') === 0) {
+                    $count++;
+                }
+            }
+        }
+        return $count;
+    }
+    
+    private function getMapBounds($vmf) {
+        $minX = $minY = $minZ = PHP_FLOAT_MAX;
+        $maxX = $maxY = $maxZ = PHP_FLOAT_MIN;
+    
+        $processVertex = function($vertex) use (&$minX, &$minY, &$minZ, &$maxX, &$maxY, &$maxZ) {
+            $minX = min($minX, $vertex[0]);
+            $minY = min($minY, $vertex[1]);
+            $minZ = min($minZ, $vertex[2]);
+            $maxX = max($maxX, $vertex[0]);
+            $maxY = max($maxY, $vertex[1]);
+            $maxZ = max($maxZ, $vertex[2]);
+        };
+    
+        $processBrushes = function($brushContainer) use ($processVertex) {
+            if (isset($brushContainer['solid'])) {
+                $solids = is_array($brushContainer['solid']) ? $brushContainer['solid'] : [$brushContainer['solid']];
+                foreach ($solids as $solid) {
+                    if (isset($solid['vertices_plus'])) {
+                        foreach ($solid['vertices_plus'] as $vertexSet) {
+                            foreach ($vertexSet as $vertex) {
+                                $processVertex($vertex);
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    
+        if (isset($vmf['world'])) {
+            $processBrushes($vmf['world']);
+        }
+        if (isset($vmf['entities'])) {
+            foreach ($vmf['entities'] as $entity) {
+                $processBrushes($entity);
+            }
+        }
+    
+        return [
+            'min' => [$minX, $minY, $minZ],
+            'max' => [$maxX, $maxY, $maxZ]
+        ];
+    }
 
-    public function reset() {
-        $this->ignoreOptions = [];
-        $this->parser = new VMFParser();
-        error_log("VMFComparator reset completed at " . date('Y-m-d H:i:s'));
+    private function countInstances($vmf) {
+        return isset($vmf['instances']) ? count($vmf['instances']) : 0;
+    }
+
+    private function countCustomVisgroups($vmf) {
+        return isset($vmf['custom_visgroups']) ? count($vmf['custom_visgroups']) : 0;
+    }
+
+    public function generateReport($differences, $stats) {
+        $report = "VMF Comparison Report\n\n";
+
+        $report .= "Differences:\n";
+        $report .= "  Removed: " . count($differences['removed']) . "\n";
+        $report .= "  Added: " . count($differences['added']) . "\n";
+        $report .= "  Changed: " . count($differences['changed']) . "\n";
+        $report .= "  Vertex Changes: " . count($differences['vertex_changed']) . "\n\n";
+
+        $report .= "Statistics:\n";
+        $report .= "  Total Differences: " . $stats['total_differences'] . "\n";
+        $report .= "  Vertex Changes: " . $stats['vertex_changes'] . "\n";
+        $report .= "  Average Vertex Deviation: " . ($stats['vertex_changes'] > 0 ? $stats['total_vertex_deviation'] / $stats['vertex_changes'] : 0) . "\n";
+        $report .= "  Max Vertex Deviation: " . $stats['max_vertex_deviation'] . "\n\n";
+
+        $report .= $this->generateCountComparison("Brushes", $stats['brush_counts']);
+        $report .= $this->generateCountComparison("Displacements", $stats['displacement_counts']);
+        $report .= $this->generateCountComparison("Visgroups", $stats['visgroup_counts']);
+        $report .= $this->generateCountComparison("Cameras", $stats['camera_counts']);
+        $report .= $this->generateCountComparison("Cordons", $stats['cordon_counts']);
+        $report .= $this->generateCountComparison("Vertices", $stats['vertex_counts']);
+        $report .= $this->generateCountComparison("Connections", $stats['connections_counts']);
+        $report .= $this->generateCountComparison("Groups", $stats['group_counts']);
+        $report .= $this->generateCountComparison("Func Detail", $stats['func_detail_counts']);
+        $report .= $this->generateCountComparison("Areaportals", $stats['areaportal_counts']);
+        $report .= $this->generateCountComparison("Occluders", $stats['occluder_counts']);
+        $report .= $this->generateCountComparison("Hint Brushes", $stats['hint_brush_counts']);
+        $report .= $this->generateCountComparison("Ladders", $stats['ladder_counts']);
+        $report .= $this->generateCountComparison("Water Volumes", $stats['water_volume_counts']);
+        $report .= $this->generateCountComparison("Spawn Points", $stats['spawn_point_counts']);
+        $report .= $this->generateCountComparison("Buy Zones", $stats['buy_zone_counts']);
+        $report .= $this->generateCountComparison("Bombsites", $stats['bombsite_counts']);
+        $report .= $this->generateCountComparison("Hostage Rescue Zones", $stats['hostage_rescue_zone_counts']);
+        $report .= $this->generateCountComparison("Hostages", $stats['hostage_counts']);
+        $report .= $this->generateCountComparison("Weapon Spawn Points", $stats['weapon_spawn_counts']);
+        $report .= $this->generateCountComparison("Light Entities", $stats['light_entity_counts']);
+        $report .= $this->generateCountComparison("Trigger Entities", $stats['trigger_entity_counts']);
+        $report .= $this->generateCountComparison("Instances", $stats['instance_counts']);
+        $report .= $this->generateCountComparison("Custom Visgroups", $stats['custom_visgroup_counts']);
+        $report .= $this->generateCountComparison("Palette Plus", $stats['palette_plus_counts']);
+        $report .= $this->generateCountComparison("Color Correction Plus", $stats['colorcorrection_plus_counts']);
+        $report .= $this->generateCountComparison("Light Plus", $stats['light_plus_counts']);
+        $report .= $this->generateCountComparison("Background Images Plus", $stats['bgimages_plus_counts']);
+
+
+        $report .= "\nEntity Counts:\n";
+        $report .= $this->generateEntityCountComparison($stats['entity_counts']);
+
+        $report .= "\nTexture Counts:\n";
+        $report .= $this->generateTextureCountComparison($stats['texture_counts']);
+
+        $report .= "\nSmoothing Group Counts:\n";
+        $report .= $this->generateSmoothingGroupCountComparison($stats['smoothing_group_counts']);
+
+        $report .= "\nSkybox Info:\n";
+        $report .= $this->generateSkyboxInfoComparison($stats['skybox_info']);
+
+        $report .= "\nMap Bounds:\n";
+        $report .= $this->generateMapBoundsComparison($stats['map_bounds']);
+
+        return $report;
+    }
+
+    private function generateCountComparison($label, $counts) {
+        return sprintf("  %s: %d vs %d\n", $label, $counts['vmf1'], $counts['vmf2']);
+    }
+
+    private function generateEntityCountComparison($entityCounts) {
+        $report = "";
+        $allEntities = array_unique(array_merge(array_keys($entityCounts['vmf1']), array_keys($entityCounts['vmf2'])));
+        sort($allEntities);
+
+        foreach ($allEntities as $entity) {
+            $count1 = $entityCounts['vmf1'][$entity] ?? 0;
+            $count2 = $entityCounts['vmf2'][$entity] ?? 0;
+            if ($count1 != $count2) {
+                $report .= sprintf("  %s: %d vs %d\n", $entity, $count1, $count2);
+            }
+        }
+
+        return $report;
+    }
+
+    private function generateTextureCountComparison($textureCounts) {
+        $report = "";
+        $allTextures = array_unique(array_merge(array_keys($textureCounts['vmf1']), array_keys($textureCounts['vmf2'])));
+        sort($allTextures);
+
+        foreach ($allTextures as $texture) {
+            $count1 = $textureCounts['vmf1'][$texture] ?? 0;
+            $count2 = $textureCounts['vmf2'][$texture] ?? 0;
+            if ($count1 != $count2) {
+                $report .= sprintf("  %s: %d vs %d\n", $texture, $count1, $count2);
+            }
+        }
+
+        return $report;
+    }
+
+    private function generateSmoothingGroupCountComparison($smoothingGroupCounts) {
+        $report = "";
+        $allGroups = array_unique(array_merge(array_keys($smoothingGroupCounts['vmf1']), array_keys($smoothingGroupCounts['vmf2'])));
+        sort($allGroups);
+
+        foreach ($allGroups as $group) {
+            $count1 = $smoothingGroupCounts['vmf1'][$group] ?? 0;
+            $count2 = $smoothingGroupCounts['vmf2'][$group] ?? 0;
+            if ($count1 != $count2) {
+                $report .= sprintf("  Group %s: %d vs %d\n", $group, $count1, $count2);
+            }
+        }
+
+        return $report;
+    }
+
+    private function generateSkyboxInfoComparison($skyboxInfo) {
+        $report = "";
+        $report .= sprintf("  Skyname: %s vs %s\n", 
+            $skyboxInfo['vmf1']['skyname'] ?? 'N/A', 
+            $skyboxInfo['vmf2']['skyname'] ?? 'N/A');
+
+        if (isset($skyboxInfo['vmf1']['sky_camera']) || isset($skyboxInfo['vmf2']['sky_camera'])) {
+            $report .= "  Sky Camera:\n";
+            $skyCam1 = $skyboxInfo['vmf1']['sky_camera'] ?? [];
+            $skyCam2 = $skyboxInfo['vmf2']['sky_camera'] ?? [];
+            
+            $allKeys = array_unique(array_merge(array_keys($skyCam1), array_keys($skyCam2)));
+            foreach ($allKeys as $key) {
+                $value1 = $skyCam1[$key] ?? 'N/A';
+                $value2 = $skyCam2[$key] ?? 'N/A';
+                if ($value1 !== $value2) {
+                    $report .= sprintf("    %s: %s vs %s\n", $key, $value1, $value2);
+                }
+            }
+        }
+
+        return $report;
+    }
+
+    private function generateMapBoundsComparison($mapBounds) {
+        $report = "";
+        $report .= sprintf("  Min: (%s) vs (%s)\n",
+            implode(", ", $mapBounds['vmf1']['min'] ?? ['N/A', 'N/A', 'N/A']),
+            implode(", ", $mapBounds['vmf2']['min'] ?? ['N/A', 'N/A', 'N/A']));
+        $report .= sprintf("  Max: (%s) vs (%s)\n",
+            implode(", ", $mapBounds['vmf1']['max'] ?? ['N/A', 'N/A', 'N/A']),
+            implode(", ", $mapBounds['vmf2']['max'] ?? ['N/A', 'N/A', 'N/A']));
+        return $report;
     }
 }
 
+class VMFComparatorException extends Exception {}
