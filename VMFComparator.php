@@ -637,22 +637,6 @@ class VMFComparator {
         return $count;
     }
     
-    private function getSkyboxInfo($vmf) {
-        $skyboxInfo = [];
-        if (isset($vmf['world']['skyname'])) {
-            $skyboxInfo['skyname'] = $vmf['world']['skyname'];
-        }
-        if (isset($vmf['entities'])) {
-            foreach ($vmf['entities'] as $entity) {
-                if (isset($entity['classname']) && $entity['classname'] === 'sky_camera') {
-                    $skyboxInfo['sky_camera'] = $entity;
-                    break;
-                }
-            }
-        }
-        return $skyboxInfo;
-    }
-    
     private function countSpawnPoints($vmf) {
         $count = 0;
         if (isset($vmf['entities'])) {
@@ -749,46 +733,17 @@ class VMFComparator {
         return $count;
     }
     
+    private function getSkyboxInfo($vmf) {
+        return $vmf['skybox_info'] ?? [
+            'skyname' => null,
+            'sky_camera' => null
+        ];
+    }
+
     private function getMapBounds($vmf) {
-        $minX = $minY = $minZ = PHP_FLOAT_MAX;
-        $maxX = $maxY = $maxZ = PHP_FLOAT_MIN;
-    
-        $processVertex = function($vertex) use (&$minX, &$minY, &$minZ, &$maxX, &$maxY, &$maxZ) {
-            $minX = min($minX, $vertex[0]);
-            $minY = min($minY, $vertex[1]);
-            $minZ = min($minZ, $vertex[2]);
-            $maxX = max($maxX, $vertex[0]);
-            $maxY = max($maxY, $vertex[1]);
-            $maxZ = max($maxZ, $vertex[2]);
-        };
-    
-        $processBrushes = function($brushContainer) use ($processVertex) {
-            if (isset($brushContainer['solid'])) {
-                $solids = is_array($brushContainer['solid']) ? $brushContainer['solid'] : [$brushContainer['solid']];
-                foreach ($solids as $solid) {
-                    if (isset($solid['vertices_plus'])) {
-                        foreach ($solid['vertices_plus'] as $vertexSet) {
-                            foreach ($vertexSet as $vertex) {
-                                $processVertex($vertex);
-                            }
-                        }
-                    }
-                }
-            }
-        };
-    
-        if (isset($vmf['world'])) {
-            $processBrushes($vmf['world']);
-        }
-        if (isset($vmf['entities'])) {
-            foreach ($vmf['entities'] as $entity) {
-                $processBrushes($entity);
-            }
-        }
-    
-        return [
-            'min' => [$minX, $minY, $minZ],
-            'max' => [$maxX, $maxY, $maxZ]
+        return $vmf['map_bounds'] ?? [
+            'min' => [0, 0, 0],
+            'max' => [0, 0, 0]
         ];
     }
 
