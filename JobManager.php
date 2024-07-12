@@ -16,91 +16,74 @@ class JobManager {
     public function createJob($file1, $file2, $ignoreOptions, $useStreaming = false) {
         try {
             $this->db->beginTransaction();
-
+            error_log("Starting job creation for files: $file1, $file2");
+            
             $ignore = implode(',', $ignoreOptions);
             $jobId = $this->db->insert('jobs', [
                 'status' => 'pending',
                 'file1' => $file1,
                 'file2' => $file2,
-                'ignore_options' => $ignore
+                'ignore_options' => $ignore,
+                'created_at' => date('Y-m-d H:i:s')
             ]);
-
+            
+            error_log("Job inserted with ID: $jobId");
+            
             $this->db->commit();
-
-            // Process the job immediately
-            if ($useStreaming) {
-                $this->processJobStreaming($jobId);
-            } else {
-                $this->processJob($jobId);
-            }
-
+            error_log("Transaction committed");
+            
+            $this->queueJob($jobId, $useStreaming);
+            error_log("Job queued");
+            
             return $jobId;
         } catch (Exception $e) {
             $this->db->rollback();
-            error_log("Failed to create job: " . $e->getMessage());
-            throw $e;
+            error_log("Failed to create job: " . $e->getMessage() . "\nStack trace: " . $e->getTraceAsString());
+            throw new JobManagerException("Failed to create job", 0, $e);
+        }
+    }
+
+    private function queueJob($jobId, $useStreaming) {
+        // Implement job queuing mechanism here
+        // For example, you could use a message queue system or a simple database table
+        // For now, we'll process it immediately, but this should be replaced with a proper queuing system
+        if ($useStreaming) {
+            $this->processJobStreaming($jobId);
+        } else {
+            $this->processJob($jobId);
         }
     }
 
     public function processJob($jobId) {
         try {
             $this->db->beginTransaction();
-
-            // Update job status to processing
-            $this->db->update('jobs', ['status' => 'processing'], 'id = ?', [$jobId]);
-
-            // Get job details
-            $job = $this->db->fetchOne("SELECT file1, file2, ignore_options FROM jobs WHERE id = ?", [$jobId]);
-            
-            if (!$job) {
-                throw new Exception("Job not found");
-            }
-
+    
+            $this->updateJobStatus($jobId, 'processing');
+    
+            $job = $this->getJobDetails($jobId);
             $ignoreOptions = explode(',', $job['ignore_options']);
             
-            // Process VMF files
-            try {
-                $parsedVMF1 = $this->parser->parseVMF($job['file1']);
-                $parsedVMF2 = $this->parser->parseVMF($job['file2']);
-            } catch (VMFParserException $e) {
-                throw new Exception("Error parsing VMF file: " . $e->getMessage());
-            }
+            error_log("Processing job $jobId: Parsing VMF1");
+            $parsedVMF1 = $this->parser->parseVMF($job['file1']);
             
+            error_log("Processing job $jobId: Parsing VMF2");
+            $parsedVMF2 = $this->parser->parseVMF($job['file2']);
+            
+            error_log("Processing job $jobId: Comparing VMFs");
             $comparisonResult = $this->comparator->compareVMF($parsedVMF1, $parsedVMF2, $ignoreOptions);
             
-            // Store results
-            $differences = json_encode($comparisonResult['differences']);
-            $stats = json_encode($comparisonResult['stats']);
-            $this->db->insert('results', [
-                'job_id' => $jobId,
-                'differences' => $differences,
-                'stats' => $stats
-            ]);
+            error_log("Processing job $jobId: Storing results");
+            $this->storeJobResults($jobId, $comparisonResult);
             
-            // Update job status to completed
-            $this->db->update('jobs', ['status' => 'completed'], 'id = ?', [$jobId]);
-
+            $this->updateJobStatus($jobId, 'completed');
+    
             $this->db->commit();
-
-            // Clean up files
+    
             $this->cleanupFiles($job['file1'], $job['file2']);
-
         } catch (Exception $e) {
             $this->db->rollback();
-            error_log("Error processing job $jobId: " . $e->getMessage() . "\n" . $e->getTraceAsString());
-            
-            // Update job status to failed
-            $this->db->update('jobs', ['status' => 'failed'], 'id = ?', [$jobId]);
-            
-            // Store error message in results
-            $errorMessage = json_encode(['error' => $e->getMessage()]);
-            $this->db->insert('results', [
-                'job_id' => $jobId,
-                'differences' => $errorMessage,
-                'stats' => $errorMessage
-            ]);
-
-            throw $e;
+            error_log("Error processing job $jobId: " . $e->getMessage() . "\nStack trace: " . $e->getTraceAsString());
+            $this->handleJobError($jobId, $e);
         }
     }
 
@@ -108,55 +91,58 @@ class JobManager {
         try {
             $this->db->beginTransaction();
 
-            // Update job status to processing
-            $this->db->update('jobs', ['status' => 'processing'], 'id = ?', [$jobId]);
+            $this->updateJobStatus($jobId, 'processing');
 
-            // Get job details
-            $job = $this->db->fetchOne("SELECT file1, file2, ignore_options FROM jobs WHERE id = ?", [$jobId]);
-            
-            if (!$job) {
-                throw new Exception("Job not found");
-            }
-
+            $job = $this->getJobDetails($jobId);
             $ignoreOptions = explode(',', $job['ignore_options']);
             
-            // Process VMF files using streaming
             $comparisonResult = $this->comparator->compareVMFStreaming($job['file1'], $job['file2'], $ignoreOptions);
             
-            // Store results
-            $differences = json_encode($comparisonResult['differences']);
-            $stats = json_encode($comparisonResult['stats']);
-            $this->db->insert('results', [
-                'job_id' => $jobId,
-                'differences' => $differences,
-                'stats' => $stats
-            ]);
+            $this->storeJobResults($jobId, $comparisonResult);
             
-            // Update job status to completed
-            $this->db->update('jobs', ['status' => 'completed'], 'id = ?', [$jobId]);
+            $this->updateJobStatus($jobId, 'completed');
 
             $this->db->commit();
 
-            // Clean up files
             $this->cleanupFiles($job['file1'], $job['file2']);
-
         } catch (Exception $e) {
             $this->db->rollback();
-            error_log("Error processing job $jobId: " . $e->getMessage() . "\n" . $e->getTraceAsString());
-            
-            // Update job status to failed
-            $this->db->update('jobs', ['status' => 'failed'], 'id = ?', [$jobId]);
-            
-            // Store error message in results
-            $errorMessage = json_encode(['error' => $e->getMessage()]);
-            $this->db->insert('results', [
-                'job_id' => $jobId,
-                'differences' => $errorMessage,
-                'stats' => $errorMessage
-            ]);
-
-            throw $e;
+            $this->handleJobError($jobId, $e);
         }
+    }
+
+    private function updateJobStatus($jobId, $status) {
+        $this->db->update('jobs', ['status' => $status], 'id = ?', [$jobId]);
+    }
+
+    private function getJobDetails($jobId) {
+        $job = $this->db->fetchOne("SELECT file1, file2, ignore_options FROM jobs WHERE id = ?", [$jobId]);
+        if (!$job) {
+            throw new JobManagerException("Job not found");
+        }
+        return $job;
+    }
+
+    private function storeJobResults($jobId, $comparisonResult) {
+        $differences = json_encode($comparisonResult['differences']);
+        $stats = json_encode($comparisonResult['stats']);
+        $this->db->insert('results', [
+            'job_id' => $jobId,
+            'differences' => $differences,
+            'stats' => $stats
+        ]);
+    }
+
+    private function handleJobError($jobId, Exception $e) {
+        error_log("Error processing job $jobId: " . $e->getMessage() . "\n" . $e->getTraceAsString());
+        $this->updateJobStatus($jobId, 'failed');
+        $errorMessage = json_encode(['error' => $e->getMessage()]);
+        $this->db->insert('results', [
+            'job_id' => $jobId,
+            'differences' => $errorMessage,
+            'stats' => $errorMessage
+        ]);
+        throw new JobManagerException("Error processing job", 0, $e);
     }
 
     public function getJobStatus($jobId) {
@@ -165,7 +151,7 @@ class JobManager {
             return $result ? $result['status'] : null;
         } catch (Exception $e) {
             error_log("Error in getJobStatus: " . $e->getMessage());
-            throw $e;
+            throw new JobManagerException("Failed to get job status", 0, $e);
         }
     }
 
@@ -174,7 +160,7 @@ class JobManager {
             $result = $this->db->fetchOne("SELECT differences, stats FROM results WHERE job_id = ?", [$jobId]);
             
             if (!$result) {
-                throw new Exception("No results found for job ID: " . $jobId);
+                throw new JobManagerException("No results found for job ID: " . $jobId);
             }
             
             return [
@@ -183,7 +169,7 @@ class JobManager {
             ];
         } catch (Exception $e) {
             error_log("Error in getJobResult: " . $e->getMessage());
-            throw $e;
+            throw new JobManagerException("Failed to fetch job result", 0, $e);
         }
     }
 
@@ -196,6 +182,7 @@ class JobManager {
         }
     }
 
+// In JobManager.php
     public function handleVMFUpload($file) {
         try {
             if (!isset($file['error']) || is_array($file['error'])) {
@@ -229,35 +216,51 @@ class JobManager {
 
             $uploadDir = $this->config['upload_dir'];
             if (!is_dir($uploadDir)) {
-                mkdir($uploadDir, 0755, true);
+                if (!mkdir($uploadDir, 0755, true)) {
+                    throw new RuntimeException('Failed to create upload directory.');
+                }
             }
 
             $filename = sprintf('%s.%s', sha1_file($file['tmp_name']), $ext);
-            if (!move_uploaded_file($file['tmp_name'], $uploadDir . $filename)) {
+            $uploadedFilePath = $uploadDir . $filename;
+            if (!move_uploaded_file($file['tmp_name'], $uploadedFilePath)) {
                 throw new RuntimeException('Failed to move uploaded file.');
             }
 
-            return $uploadDir . $filename;
+            // Check if the file is readable
+            if (!is_readable($uploadedFilePath)) {
+                throw new RuntimeException('Uploaded file is not readable.');
+            }
+
+            // Validate VMF file content
+            $fileContent = file_get_contents($uploadedFilePath);
+            if ($fileContent === false) {
+                throw new RuntimeException('Failed to read uploaded file contents.');
+            }
+
+            if (strpos($fileContent, 'versioninfo') === false) {
+                unlink($uploadedFilePath); // Remove invalid file
+                throw new RuntimeException('Invalid VMF file format.');
+            }
+
+            return $uploadedFilePath;
         } catch (RuntimeException $e) {
-            error_log($e->getMessage());
+            error_log("Error handling VMF upload: " . $e->getMessage());
             return false;
         }
     }
 
     public function cleanupTemporaryFiles() {
         $uploadDir = $this->config['upload_dir'];
-        $files = glob($uploadDir . '*'); // Get all file names
+        $files = glob($uploadDir . '*');
         $currentTime = time();
     
         foreach($files as $file) {
-            if(is_file($file)) {
-                if($currentTime - filemtime($file) >= 24 * 3600) { // Older than 24 hours
-                    unlink($file);
-                }
+            if(is_file($file) && ($currentTime - filemtime($file) >= 24 * 3600)) {
+                unlink($file);
             }
         }
     
-        // Optionally, log the cleanup
         error_log("Temporary files cleanup completed at " . date('Y-m-d H:i:s'));
     }
 
@@ -283,3 +286,7 @@ class JobManager {
         }
     }
 }
+
+class JobManagerException extends Exception {}
+
+?>

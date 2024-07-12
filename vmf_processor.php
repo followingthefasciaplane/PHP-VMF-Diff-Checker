@@ -1,4 +1,12 @@
 <?php
+error_reporting(E_ALL);
+ini_set('display_errors', 0);
+ini_set('log_errors', 1);
+ini_set('error_log', '/home/rampslid/vmfcheck.rampsliders.wiki/error.log');
+
+// Start output buffering
+ob_start();
+
 // Load configuration
 $config = require_once 'config.php';
 
@@ -12,6 +20,23 @@ spl_autoload_register(function ($class_name) {
     }
 });
 
+// Error logging helper function
+function logError($message, $exception) {
+    error_log($message . ": " . $exception->getMessage() . "\nStack trace: " . $exception->getTraceAsString());
+}
+
+// JSON response helper function
+function jsonResponse($data, $statusCode = 200) {
+    ob_clean(); // Clear any output buffered so far
+    http_response_code($statusCode);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($data);
+    exit;
+}
+
+// Check if it's an AJAX request
+$isAjax = !empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest';
+
 // Initialize objects
 try {
     $db = new Database($config);
@@ -21,60 +46,49 @@ try {
     $ajaxHandler = new AjaxHandler($jobManager, $config);
 } catch (Exception $e) {
     logError("Initialization error", $e);
-    die("Initialization error: " . $e->getMessage());
+    if ($isAjax) {
+        jsonResponse(['error' => 'Initialization error: ' . $e->getMessage()], 500);
+    } else {
+        die("Initialization error: " . $e->getMessage());
+    }
 }
 
 // Handle request
 try {
-    if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
+    if ($isAjax) {
         // AJAX request
-        header('Content-Type: application/json');
         $result = $ajaxHandler->handleRequest();
         if ($result === false || $result === null) {
             throw new Exception("AjaxHandler returned invalid result");
         }
-        echo $result;
+        
+        // Output JSON
+        jsonResponse(json_decode($result, true)); // Decode and re-encode to ensure it's valid JSON
     } else {
         // Normal request - output HTML
-        // include 'index.html';
+        include 'index.html';
     }
-} catch (Exception $e) {
+} catch (Throwable $e) {
     logError("Error processing request", $e);
     
-    if (!empty($_SERVER['HTTP_X_REQUESTED_WITH'])) {
-        echo json_encode(['error' => 'An unexpected error occurred. Please try again later.']);
+    if ($isAjax) {
+        jsonResponse([
+            'error' => 'An unexpected error occurred. Please try again later.',
+            'debug_message' => $e->getMessage(),
+            'debug_trace' => $e->getTraceAsString()
+        ], 500);
     } else {
         echo "An unexpected error occurred. Please try again later.";
     }
 }
 
-// Cleanup
-try {
-    if (isset($db)) {
-        $db->close();
-    }
+// End output buffering and flush
+ob_end_flush();
 
-    if (isset($jobManager)) {
-        $jobManager->cleanupTemporaryFiles();
-    }
-
-    if (isset($comparator) && method_exists($comparator, 'reset')) {
-        $comparator->reset();
-    }
-
-    while (ob_get_level() > 0) {
-        ob_end_flush();
-    }
-} catch (Exception $e) {
-    logError("Error during cleanup", $e);
-}
-
-// Process pending jobs and clean up old jobs (consider moving to a cron job)
-if (isset($jobManager)) {
-    $jobManager->processPendingJobs();
-    $jobManager->cleanupOldJobs(7);
-}
-
-function logError($message, Exception $e) {
-    error_log($message . ": " . $e->getMessage() . "\nStack trace: " . $e->getTraceAsString());
-}
+// Cleanup and background tasks can be handled here if needed
+// Consider moving these to a separate cron job or background process
+// if (isset($jobManager)) {
+//     $jobManager->processPendingJobs();
+//     $jobManager->cleanupOldJobs(7);
+// }
+?>

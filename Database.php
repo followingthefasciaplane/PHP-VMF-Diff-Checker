@@ -153,3 +153,5 @@ class Database {
         return $this->mysqli->get_autocommit() === false;
     }
 }
+
+?>

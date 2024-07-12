@@ -29,9 +29,12 @@ class AjaxHandler {
                 default:
                     throw new Exception("Invalid action specified.");
             }
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             error_log("AjaxHandler error: " . $e->getMessage() . "\nStack trace: " . $e->getTraceAsString());
-            return $this->jsonResponse(['error' => $e->getMessage()], 400);
+            return $this->safejsonResponse([
+                'error' => $e->getMessage(),
+                'debug_trace' => $e->getTraceAsString()
+            ], 400);
         }
     }
 
@@ -54,9 +57,9 @@ class AjaxHandler {
             
             $jobId = $this->jobManager->createJob($vmf1Path, $vmf2Path, $ignoreOptions, $useStreaming);
 
-            return $this->jsonResponse(['jobId' => $jobId]);
+            return $this->safejsonResponse(['jobId' => $jobId]);
         } catch (Exception $e) {
-            return $this->jsonResponse(['error' => $e->getMessage()], 400);
+            return $this->safejsonResponse(['error' => $e->getMessage()], 400);
         }
     }
 
@@ -76,9 +79,9 @@ class AjaxHandler {
                 throw new Exception("Job not found");
             }
 
-            return $this->jsonResponse(['status' => $status]);
+            return $this->safejsonResponse(['status' => $status]);
         } catch (Exception $e) {
-            return $this->jsonResponse(['error' => $e->getMessage()], 400);
+            return $this->safejsonResponse(['error' => $e->getMessage()], 400);
         }
     }
 
@@ -98,20 +101,28 @@ class AjaxHandler {
                 throw new Exception("No results found for this job ID.");
             }
 
-            return $this->jsonResponse($result);
+            return $this->safejsonResponse($result);
         } catch (Exception $e) {
-            return $this->jsonResponse(['error' => $e->getMessage()], 400);
+            return $this->safejsonResponse(['error' => $e->getMessage()], 400);
         }
     }
 
-    private function jsonResponse($data, $statusCode = 200) {
-        http_response_code($statusCode);
-        header('Content-Type: application/json');
-        $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    private function safejsonResponse($data, $statusCode = 200) {
+        $response = [
+            'status' => $statusCode,
+            'data' => $data
+        ];
+        
+        $json = json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         if ($json === false) {
             error_log("JSON encode error: " . json_last_error_msg());
-            return json_encode(['error' => 'Internal server error']);
+            return json_encode([
+                'status' => 500,
+                'error' => 'Internal server error',
+                'debug_message' => json_last_error_msg()
+            ]);
         }
         return $json;
     }
 }
+?>
