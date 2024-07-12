@@ -148,20 +148,24 @@
         let allDifferences = {};
         const itemsPerPage = 100;
         let currentPage = 1;
-        const jobCheckInterval = 5000; // 5 seconds
+        const jobCheckInterval = 20000; // 20 seconds
 
         document.getElementById('vmfForm').addEventListener('submit', function(e) {
             e.preventDefault();
             const formData = new FormData(this);
             formData.append('action', 'upload');
+            formData.append('useStreaming', document.getElementById('useStreaming').checked);
             
             document.getElementById('loading').style.display = 'block';
             document.getElementById('results').innerHTML = '';
             document.getElementById('jobStatus').style.display = 'none';
-            
+    
             fetch('vmf_processor.php', {
                 method: 'POST',
-                body: formData
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
             })
             .then(response => response.json())
             .then(data => {
@@ -173,7 +177,7 @@
             })
             .catch(error => {
                 console.error('Error:', error);
-                alert('An error occurred: ' + error.message);
+                alert('An error occurred while processing the request: ' + error.message);
                 document.getElementById('loading').style.display = 'none';
             });
         });
@@ -181,17 +185,22 @@
         function checkJobStatus() {
             if (!jobId) return;
             
-            fetch(`vmf_processor.php?action=status&jobId=${jobId}`)
+            const formData = new FormData();
+            formData.append('action', 'status');
+            formData.append('jobId', jobId);
+            
+            fetch('vmf_processor.php', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
             .then(response => response.json())
             .then(data => {
                 const jobStatusDiv = document.getElementById('jobStatus');
                 jobStatusDiv.style.display = 'block';
                 jobStatusDiv.textContent = `Job Status: ${data.status}`;
-                
-                if (data.progress) {
-                    updateProgressBar(data.progress);
-                }
-                
                 if (data.status === 'completed') {
                     document.getElementById('loading').style.display = 'none';
                     getJobResult();
@@ -217,7 +226,17 @@
         function getJobResult() {
             if (!jobId) return;
             
-            fetch(`vmf_processor.php?action=result&jobId=${jobId}`)
+            const formData = new FormData();
+            formData.append('action', 'result');
+            formData.append('jobId', jobId);
+            
+            fetch('vmf_processor.php', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
             .then(response => response.json())
             .then(data => {
                 if (data.error) {
@@ -228,7 +247,7 @@
             })
             .catch(error => {
                 console.error('Error:', error);
-                alert('An error occurred while fetching results: ' + error.message);
+                alert('An error occurred while fetching job results: ' + error.message);
                 document.getElementById('loading').style.display = 'none';
             });
         }
